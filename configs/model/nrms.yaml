@@ -1,0 +1,21 @@
+_target_: src.models.nrms.NRMS
+
+# Model architecture parameters
+word_embedding_dim: 300
+num_attention_heads: 16
+query_vector_dim: 200
+dropout_rate: 0.2
+max_vocabulary_size: 100000
+
+# News encoder parameters
+news_encoder:
+  word_embedding_dim: ${model.word_embedding_dim}
+  num_attention_heads: ${model.num_attention_heads}
+  query_vector_dim: ${model.query_vector_dim}
+  dropout_rate: ${model.dropout_rate}
+
+# User encoder parameters
+user_encoder:
+  num_attention_heads: ${model.num_attention_heads}
+  query_vector_dim: ${model.query_vector_dim}
+  dropout_rate: ${model.dropout_rate}

@@ -1,0 +1,84 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+
+# Project specific
+.cache/
+.cache/cache_index.json
+outputs/
+multirun/
+wandb/
+checkpoints/
+*.h5
+*.ckpt
+*.pt
+logs/
+.hydra/
+
+# Do not keep dataset files
+data/
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Logs
+*.log
+*.log.*
+log/
+
+# OS
+.DS_Store
+Thumbs.db
+*.db
+
+# Poetry
+poetry.lock
+
+# Testing
+.coverage
+coverage.xml
+.pytest_cache/
+htmlcov/
+
+# Documentation
+docs/_build/
+site/
+
+# Environment variables
+.env
+.env.*

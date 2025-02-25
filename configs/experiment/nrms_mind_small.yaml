@@ -1,0 +1,36 @@
+# @package _global_
+
+defaults:
+  - override /model: nrms
+  - override /dataset: mind
+  - _self_
+
+# Experiment name
+name: "nrms_mind_small"
+description: "NRMS model trained on MIND-small dataset"
+
+# Dataset specific
+dataset:
+  version: "small"
+  max_title_length: 30
+  max_history_length: 50
+
+# Model specific
+model:
+  word_embedding_dim: 300
+  num_attention_heads: 16
+  query_vector_dim: 200
+  dropout_rate: 0.2
+
+# Training parameters
+train:
+  batch_size: 32
+  num_epochs: 10
+  learning_rate: 0.0001
+  early_stopping_patience: 5
+
+# Logging
+logging:
+  enable_wandb: false
+  project_name: "keras-news-recsys"
+  experiment_name: ${name}

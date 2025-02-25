@@ -1,0 +1,42 @@
+defaults:
+  - _self_
+  - model: nrms  # default model
+  - dataset: mind  # default dataset
+  - experiment: null  # optional experiment override
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+# Basic configuration (fallback values if not specified in experiment)
+seed: 42
+device: cuda
+num_workers: 4
+
+# Default training parameters (can be overridden by experiment)
+train:
+  batch_size: 32
+  num_epochs: 10
+  learning_rate: 0.0001
+  gradient_clip_val: 1.0
+  early_stopping_patience: 5
+  model_dir: "checkpoints"
+
+# Default logging configuration (can be overridden by experiment)
+logging:
+  project_name: "keras-news-recsys"
+  log_every_n_steps: 100
+  enable_wandb: false
+
+# Experiment tracking
+experiment_name: ${model._target_}_${dataset.dataset.version}
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+# Cache configuration
+cache:
+  root_dir: ".cache"  # Hidden cache directory in project root
+  clear_on_start: false  # Whether to clear cache when starting training

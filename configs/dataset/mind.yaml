@@ -1,0 +1,26 @@
+_target_: src.datasets.mind.MINDDataset
+
+# Dataset configuration
+name: "MIND"
+version: "small"  # Options: small, large
+embedding_type: "glove"  # Options: glove, bert
+root_dir: "data/MIND"
+
+# Dataset URLs
+urls:
+  small:
+    train: "https://recodatasets.z20.web.core.windows.net/newsrec/MINDsmall_train.zip"
+    valid: "https://recodatasets.z20.web.core.windows.net/newsrec/MINDsmall_dev.zip"
+  large:
+    train: "https://recodatasets.z20.web.core.windows.net/newsrec/MINDlarge_train.zip"
+    valid: "https://recodatasets.z20.web.core.windows.net/newsrec/MINDlarge_dev.zip"
+    test: "https://recodatasets.z20.web.core.windows.net/newsrec/MINDlarge_test.zip"
+
+# Preprocessing parameters
+max_title_length: 30
+max_abstract_length: 50
+max_history_length: 50
+
+# Vocabulary parameters
+min_word_freq: 3
+max_vocabulary_size: 100000

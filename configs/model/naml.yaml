@@ -1,0 +1,18 @@
+_target_: src.models.naml.NAML
+
+model:
+  word_embedding_dim: 300
+  category_embedding_dim: 100
+  num_attention_heads: 16
+  query_vector_dim: 200
+
+  # CNN parameters
+  cnn_filter_num: 400
+  cnn_kernel_size: 3
+
+  # Dense layers
+  dense_units: 400
+  news_embedding_dim: 400
+
+  # Regularization
+  dropout_rate: 0.2
