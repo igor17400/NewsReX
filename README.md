@@ -44,8 +44,8 @@ poetry --version
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/keras-rec.git
-cd keras-rec
+git clone https://github.com/yourusername/BTC.git
+cd BTC
 ```
 
 2. Configure Poetry to create virtual environment in project directory:
@@ -95,7 +95,7 @@ poetry run python src/test.py model=naml dataset=mind
 ## 📁 Project Structure
 
 ```
-keras-rec/
+BTC/
 ├── configs/                 # Hydra configuration files
 │   ├── config.yaml         # Base configuration
 │   ├── model/              # Model-specific configs
