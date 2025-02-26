@@ -1,10 +1,10 @@
-# KerasRec: A News Recommendation System Using Keras + Hydra
+# BTC: Behind The Curtains for Recommender Systems
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/release/python-380/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-KerasRec is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PytorchLightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
+BTC is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PytorchLightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
 
 ## 🌟 Features
 
