@@ -5,7 +5,6 @@ multiheads: 16  # Number of attention heads
 head_dim: 20    # Dimension of each attention head (multiheads * head_dim = 320 > 300d embeddings)
 attention_hidden_dim: 200  # Hidden dimension for additive attention
 dropout_rate: 0.2  # Dropout rate
-seed: 42  # Random seed for initialization
 
 # News encoder parameters
 # news_encoder:

@@ -1,10 +1,9 @@
 # @package _global_
 
 defaults:
-  - /sampling: base
+  - /sampling/base
   - override /model: nrms
   - override /dataset: mind
-  - _self_
 
 # Experiment name
 name: "nrms_mind_small"
@@ -12,9 +11,11 @@ description: "NRMS model trained on MIND-small dataset"
 
 # Dataset specific
 dataset:
+  name: "mind"
   version: "small"
   max_title_length: 30
   max_history_length: 50
+  random_seed: 42
 
 # Model specific
 model:
@@ -34,9 +35,16 @@ train:
 logging:
   enable_wandb: false
   project_name: "keras-news-recsys"
-  experiment_name: ${name}
+  experiment_name: "nrms_mind_${dataset.version}"
 
-# Sampling configuration (optional overrides)
+# Sampling configuration
 sampling:
   max_impressions_length: 5
   strategy: "random"
+  random:
+    replace: false
+
+device:
+  gpu_ids: [0]  # Use first GPU
+  memory_limit: 0.9
+  mixed_precision: true

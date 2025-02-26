@@ -1,7 +1,7 @@
 import logging
 import urllib.request
 import zipfile
-from typing import Dict, Tuple
+from typing import Dict, Iterator, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,9 +36,10 @@ class MINDDataset(BaseNewsDataset):
         max_impressions_length: int,
         min_word_freq: int,
         max_vocabulary_size: int,
+        random_seed: int,
         embedding_type: str = "glove",
         embedding_size: int = 300,
-        sampling_config: DictConfig = None,
+        sampling: DictConfig = None,
     ):
         super().__init__()  # Initialize base class with no arguments
         self.name = name
@@ -55,7 +56,7 @@ class MINDDataset(BaseNewsDataset):
         self.embedding_type = embedding_type
         self.embedding_size = embedding_size
         self.embeddings_manager = EmbeddingsManager(self.cache_manager)
-        self.sampler = ImpressionSampler(sampling_config) if sampling_config else None
+        self.sampler = ImpressionSampler(sampling) if sampling else None
 
         logger.info(f"Initializing MIND dataset ({version} version)")
         logger.info(f"Data will be stored in: {self.dataset_path}")
@@ -63,14 +64,32 @@ class MINDDataset(BaseNewsDataset):
         # Create directories if they don't exist
         self.dataset_path.mkdir(parents=True, exist_ok=True)
 
-        # Download and process data
+        # Set random seed
+        np.random.seed(random_seed)
+
+        # Load and process data
+        self._load_data()
+
+    def _load_data(self) -> None:
+        """Load and process all data."""
+        # Download dataset if needed
         self.download_dataset()
+
+        # Build vocabulary from training data
         self.tokenizer = self.build_vocabulary()
 
-        if embedding_type == "glove":
+        # Load embeddings
+        if self.embedding_type == "glove":
             self.embeddings = self.embeddings_manager.load_glove()
-        elif embedding_type == "bert":
+        elif self.embedding_type == "bert":
             self.bert_model, self.bert_tokenizer = self.embeddings_manager.load_bert()
+
+        # Load train and validation data
+        (self.news_data, self.behaviors_data), (_, self.val_behaviors_data) = self.get_train_val_data()
+
+        # Set number of behaviors
+        self.n_behaviors = len(self.behaviors_data["histories"])
+        logger.info(f"Loaded {self.n_behaviors:,} training behaviors")
 
     def download_dataset(self) -> None:
         """Download and extract MIND dataset if not already present"""
@@ -470,3 +489,94 @@ class MINDDataset(BaseNewsDataset):
         self.n_test_behaviors = len(behaviors_df)
 
         return self.test_news_data, self.test_behaviors_data
+
+    def train_dataloader(self, batch_size: int) -> Iterator[Tuple]:
+        """Create batches of training data."""
+        return self._create_dataloader(
+            self.behaviors_data["histories"],
+            self.behaviors_data["impressions"],
+            self.behaviors_data["labels"],
+            self.behaviors_data["masks"],
+            batch_size,
+            shuffle=True,
+        )
+
+    def val_dataloader(self, batch_size: int) -> Iterator[Tuple]:
+        """Create batches of validation data."""
+        return self._create_dataloader(
+            self.val_behaviors_data["histories"],
+            self.val_behaviors_data["impressions"],
+            self.val_behaviors_data["labels"],
+            self.val_behaviors_data["masks"],
+            batch_size,
+            shuffle=False,
+        )
+
+    def _create_dataloader(
+        self,
+        histories: np.ndarray,  # [n_behaviors, max_history_len]
+        impressions: np.ndarray,  # [n_behaviors, max_impressions_len]
+        labels: np.ndarray,  # [n_behaviors, max_impressions_len]
+        masks: np.ndarray,  # [n_behaviors, max_impressions_len]
+        batch_size: int,
+        shuffle: bool = False,
+    ) -> Iterator[Tuple]:
+        """Create batches for training/validation.
+
+        Args:
+            histories: User history news IDs
+            impressions: Candidate news IDs
+            labels: Click labels
+            masks: Valid position masks
+            batch_size: Batch size
+            shuffle: Whether to shuffle data
+
+        Yields:
+            Tuple of ((impression_news, history_news), labels, masks)
+        """
+        n_samples = len(histories)
+        indices = np.arange(n_samples)
+        if shuffle:
+            np.random.shuffle(indices)
+
+        for start_idx in range(0, n_samples, batch_size):
+            end_idx = min(start_idx + batch_size, n_samples)
+            batch_indices = indices[start_idx:end_idx]
+
+            # Get batch data
+            history_batch = histories[batch_indices]  # [batch_size, history_len]
+            impressions_batch = impressions[batch_indices]  # [batch_size, impression_len]
+            impression_labels = labels[batch_indices]  # [batch_size, impression_len]
+            impression_masks = masks[batch_indices]  # [batch_size, impression_len]
+
+            # Get embeddings for history news
+            history_news = {
+                "title": np.stack(
+                    [
+                        [
+                            self.news_data["title"][news_id]
+                            if news_id != 0
+                            else np.zeros_like(self.news_data["title"][0])  # Zero embedding for padding
+                            for news_id in user_history
+                        ]
+                        for user_history in history_batch
+                    ]
+                )  # [batch_size, history_len, seq_len, emb_dim]
+            }
+
+            # Get embeddings for impression news
+            impression_news = {
+                "title": np.stack(
+                    [
+                        [
+                            self.news_data["title"][news_id]
+                            if news_id != 0
+                            else np.zeros_like(self.news_data["title"][0])  # Zero embedding for padding
+                            for news_id in user_impressions
+                        ]
+                        for user_impressions in impressions_batch
+                    ]
+                )  # [batch_size, impression_len, seq_len, emb_dim]
+            }
+
+            yield (impression_news, history_news), impression_labels, impression_masks

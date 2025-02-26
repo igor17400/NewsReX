@@ -1,7 +1,7 @@
 # Base sampling configuration
 max_impressions_length: 5  # Maximum number of impressions to keep per user
 strategy: "random"  # Options: random, topic_diverse, temporal, popularity
-random_seed: 42  # For reproducibility
+random_seed: ${seed}  # Use global seed from base config
 
 # Strategy-specific parameters
 random:

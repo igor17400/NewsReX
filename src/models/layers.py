@@ -213,7 +213,7 @@ class SelfAttention(layers.Layer):
             tf.Tensor: Output tensors.
         """
         if len(QKVs) == 3:
-            Q_seq, K_seq, V_seq, _, _ = QKVs
+            Q_seq, K_seq, V_seq = QKVs  # type: ignore
             Q_len, V_len = None, None
         elif len(QKVs) == 5:
             Q_seq, K_seq, V_seq, Q_len, V_len = QKVs

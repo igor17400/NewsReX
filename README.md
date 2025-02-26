@@ -73,6 +73,13 @@ poetry run pre-commit install
 pip install 'tensorflow[and-cuda]'
 ```
 
+To test it out if it worked we recommend executing the following commands:
+
+```bash
+python3 -c "import tensorflow as tf; print(tf.reduce_sum(tf.random.normal([1000, 1000])))"
+python3 -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+```
+
 Note: You can also run commands without activating the shell using `poetry run`, for example:
 ```bash
 poetry run python src/train.py
