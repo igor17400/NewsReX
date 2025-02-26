@@ -67,6 +67,12 @@ poetry shell
 poetry run pre-commit install
 ```
 
+5. You might need to install tensorflow with the following command to make it sure that it'll work with the GPUs
+
+```bash
+pip install 'tensorflow[and-cuda]'
+```
+
 Note: You can also run commands without activating the shell using `poetry run`, for example:
 ```bash
 poetry run python src/train.py
