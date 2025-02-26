@@ -37,16 +37,14 @@ def test(cfg: DictConfig) -> None:
 
     # Get test data
     test_data = dataset.get_test_data()
+    news_input, history_input, labels, masks, impression_ids = test_data
+    predictions = model((news_input, history_input), training=False)
 
     # Create metrics
     metrics = NewsRecommenderMetrics()
 
-    # Run evaluation
-    news_input, history_input, labels, impression_ids = test_data
-    predictions = model((news_input, history_input), training=False)
-
     # Compute metrics
-    test_metrics = metrics.group_metrics(labels, predictions, impression_ids)
+    test_metrics = metrics.group_metrics(labels, predictions, impression_ids, masks=masks)
 
     # Log results
     logger.info("Test Metrics:")

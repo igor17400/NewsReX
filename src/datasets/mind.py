@@ -5,24 +5,25 @@ from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
+from omegaconf import DictConfig
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 from tensorflow.keras.preprocessing.text import Tokenizer
 
+from datasets.base import BaseNewsDataset
 from utils.cache_manager import CacheManager
 from utils.embeddings import EmbeddingsManager
+from utils.sampling import ImpressionSampler
 
 # Set up rich logging
-logging.basicConfig(
-    level="INFO", format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=True)]
-)
+logging.basicConfig(level="INFO", format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=True)])
 
 logger = logging.getLogger("mind_dataset")
 console = Console()
 
 
-class MINDDataset:
+class MINDDataset(BaseNewsDataset):
     def __init__(
         self,
         name: str,
@@ -32,10 +33,14 @@ class MINDDataset:
         max_title_length: int,
         max_abstract_length: int,
         max_history_length: int,
+        max_impressions_length: int,
         min_word_freq: int,
         max_vocabulary_size: int,
         embedding_type: str = "glove",
+        embedding_size: int = 300,
+        sampling_config: DictConfig = None,
     ):
+        super().__init__()  # Initialize base class with no arguments
         self.name = name
         self.version = version
         self.cache_manager = CacheManager()
@@ -44,10 +49,13 @@ class MINDDataset:
         self.max_title_length = max_title_length
         self.max_abstract_length = max_abstract_length
         self.max_history_length = max_history_length
+        self.max_impressions_length = max_impressions_length
         self.min_word_freq = min_word_freq
         self.max_vocabulary_size = max_vocabulary_size
         self.embedding_type = embedding_type
+        self.embedding_size = embedding_size
         self.embeddings_manager = EmbeddingsManager(self.cache_manager)
+        self.sampler = ImpressionSampler(sampling_config) if sampling_config else None
 
         logger.info(f"Initializing MIND dataset ({version} version)")
         logger.info(f"Data will be stored in: {self.dataset_path}")
@@ -128,35 +136,44 @@ class MINDDataset:
         """Build vocabulary from training data"""
         logger.info("Building vocabulary from training data...")
 
-        news_file = self.dataset_path / "train" / "news.tsv"
-        with console.status as status:
-            news_df = pd.read_csv(
-                news_file,
-                sep="\t",
-                header=None,
-                names=[
-                    "id",
-                    "category",
-                    "subcategory",
-                    "title",
-                    "abstract",
-                    "url",
-                    "title_entities",
-                    "abstract_entities",
-                ],
-            )
+        # Create tokenizer
+        tokenizer = Tokenizer(
+            num_words=self.max_vocabulary_size,
+            oov_token="<UNK>",
+            filters='!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
+        )
 
-            status.update("[bold green]Processing texts...")
-            texts = news_df["title"].fillna("") + " " + news_df["abstract"].fillna("")
+        # Load training news
+        train_dir = self.dataset_path / "train"
+        news_df = pd.read_csv(
+            train_dir / "news.tsv",
+            sep="\t",
+            header=None,
+            names=[
+                "id",
+                "category",
+                "subcategory",
+                "title",
+                "abstract",
+                "url",
+                "title_entities",
+                "abstract_entities",
+            ],
+        )
 
-            status.update("[bold green]Creating tokenizer...")
-            tokenizer = Tokenizer(num_words=self.max_vocabulary_size, oov_token="<UNK>")
+        # Combine title and abstract text
+        texts = []
+        with Progress() as progress:
+            task = progress.add_task("Processing texts...", total=len(news_df))
+            for _, row in news_df.iterrows():
+                title = row["title"] if pd.notna(row["title"]) else ""
+                abstract = row["abstract"] if pd.notna(row["abstract"]) else ""
+                texts.append(f"{title} {abstract}")
+                progress.advance(task)
 
-            status.update("[bold green]Fitting tokenizer...")
-            tokenizer.fit_on_texts(texts)
+        # Fit tokenizer
+        tokenizer.fit_on_texts(texts)
 
-        vocab_size = len(tokenizer.word_index)
-        logger.info(f"Vocabulary built with {vocab_size:,} words")
         return tokenizer
 
     def process_news(self, news_df: pd.DataFrame) -> Dict[str, np.ndarray]:
@@ -185,25 +202,73 @@ class MINDDataset:
         """Convert texts to GloVe embeddings"""
         embeddings = []
         for text in texts:
-            words = text.lower().split()
-            word_embeddings = [
-                self.embeddings.get(word, np.zeros(300)) for word in words[: self.max_title_length]
-            ]
-            # Pad if necessary
-            if len(word_embeddings) < self.max_title_length:
-                word_embeddings.extend(
-                    [np.zeros(300)] * (self.max_title_length - len(word_embeddings))
-                )
-            embeddings.append(word_embeddings)
+            if pd.isna(text):
+                # Handle NaN by appending a zero vector of the appropriate length
+                embeddings.append([np.zeros(self.embedding_size)] * self.max_title_length)
+                continue
+
+            try:
+                words = text.lower().split()
+                word_embeddings = [
+                    self.embeddings.get(word, np.zeros(self.embedding_size)) for word in words[: self.max_title_length]
+                ]
+                # Pad if necessary
+                if len(word_embeddings) < self.max_title_length:
+                    word_embeddings.extend([np.zeros(self.embedding_size)] * (self.max_title_length - len(word_embeddings)))
+                embeddings.append(word_embeddings)
+            except Exception as e:
+                raise Exception(f"Error processing text: {text} | Error: {e}")
         return np.array(embeddings)
 
     def process_behaviors(
-        self, behaviors_df: pd.DataFrame, news_dict: Dict[str, int]
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Process user behaviors into numerical format"""
-        logger.info("Processing user behaviors...")
+        self, behaviors_df: pd.DataFrame, news_dict: Dict[str, int], stage: str
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Process user behaviors into numerical format suitable for model input.
+
+        This method processes a DataFrame containing user behavior data, specifically
+        the history of news articles a user has interacted with and the impressions
+        (news articles shown to the user along with their click status). The method
+        converts these into fixed-size numerical arrays that can be used as input
+        for machine learning models.
+
+        Parameters:
+        ----------
+        behaviors_df : pd.DataFrame
+            A DataFrame containing user behavior data. It must include the columns:
+            - 'history': A string of space-separated news IDs representing the user's
+              interaction history.
+            - 'impressions': A string of space-separated pairs in the format 'newsID-clickStatus',
+              where 'clickStatus' is '1' if the article was clicked and '0' otherwise.
+
+        news_dict : Dict[str, int]
+            A dictionary mapping news IDs to numerical indices. This is used to convert
+            news IDs into indices that can be used as input for models.
+
+        stage : str
+            A string indicating whether the method is being called for training or validation data.
+
+        Returns:
+        -------
+        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+            A tuple containing four numpy arrays:
+            - histories: A 2D numpy array where each row represents a user's interaction
+              history, converted into indices and padded to a fixed length.
+            - impression_ids: A 2D numpy array where each row contains the indices of
+              news articles in the impression list, padded to a fixed length.
+            - labels: A 2D numpy array where each row contains the click status for each
+              impression shown to the user, represented as binary values (1 for clicked,
+              0 for not clicked), padded to a fixed length.
+            - masks: A 2D numpy array where each row contains binary values indicating
+              which positions in the impression list are valid (1) and which are padded (0).
+        """
+        logger.info(f"Processing user behaviors for {stage} data...")
+        # Store number of behaviors
+        self.n_behaviors = len(behaviors_df)
+
         histories = []
+        impression_ids = []
         labels = []
+        masks = []
 
         with Progress(
             SpinnerColumn(),
@@ -213,34 +278,87 @@ class MINDDataset:
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task("Processing behaviors...", total=len(behaviors_df))
+            task = progress.add_task(f"Processing {stage} behaviors...", total=len(behaviors_df))
 
             for _, row in behaviors_df.iterrows():
-                history = row["history"].split()
+                # Process history
+                history = row["history"].split() if pd.notna(row["history"]) else []
                 history_indices = [news_dict.get(h, 0) for h in history]
                 history_indices = history_indices[-self.max_history_length :]
-                history_indices = [0] * (
-                    self.max_history_length - len(history_indices)
-                ) + history_indices
+                history_indices = [0] * (self.max_history_length - len(history_indices)) + history_indices
 
+                # Process impressions
                 impressions = row["impressions"].split()
-                for imp in impressions:
-                    news_id, label = imp.split("-")
+                if self.sampler:
+                    impression_groups = self.sampler.sample_impressions(impressions)
+                    # Process all impression groups at once
+                    imp_ids_all = []
+                    click_status_all = []
+                    masks_all = []
+
+                    for group in impression_groups:
+                        imp_ids = []
+                        click_status = []
+                        for imp in group:
+                            news_id, label = imp.split("-")
+                            imp_ids.append(news_dict.get(news_id, 0))
+                            click_status.append(int(label))
+
+                        imp_ids_all.append(imp_ids)
+                        click_status_all.append(click_status)
+                        masks_all.append([1] * len(group))
+
+                    # Add the history once for all groups
+                    histories.extend([history_indices] * len(impression_groups))
+                    impression_ids.extend(imp_ids_all)
+                    labels.extend(click_status_all)
+                    masks.extend(masks_all)
+                else:
+                    # Original processing for no sampling
+                    imp_ids = []
+                    click_status = []
+                    for imp in impressions:
+                        news_id, label = imp.split("-")
+                        imp_ids.append(news_dict.get(news_id, 0))
+                        click_status.append(int(label))
+
+                    # Pad if necessary
+                    mask = [1] * len(imp_ids)
+                    if len(imp_ids) < self.max_impressions_length:
+                        imp_ids += [0] * (self.max_impressions_length - len(imp_ids))
+                        click_status += [0] * (self.max_impressions_length - len(click_status))
+                        mask += [0] * (self.max_impressions_length - len(mask))
+                    else:
+                        imp_ids = imp_ids[: self.max_impressions_length]
+                        click_status = click_status[: self.max_impressions_length]
+                        mask = mask[: self.max_impressions_length]
+
                     histories.append(history_indices)
-                    labels.append(int(label))
+                    impression_ids.append(imp_ids)
+                    labels.append(click_status)
+                    masks.append(mask)
 
                 progress.advance(task)
 
-        logger.info(f"Processed {len(behaviors_df):,} user behaviors")
-        return np.array(histories), np.array(labels)
+        logger.info(f"Processed {len(behaviors_df):,} user behaviors for {stage} data")
+        histories_arr = np.array(histories)
+        logger.info(f"Histories shape: {histories_arr.shape}")
+        impression_ids_arr = np.array(impression_ids)
+        logger.info(f"Impression IDs shape: {impression_ids_arr.shape}")
+        labels_arr = np.array(labels)
+        logger.info(f"Labels shape: {labels_arr.shape}")
+        masks_arr = np.array(masks)
+        logger.info(f"Masks shape: {masks_arr.shape}")
 
-    def get_train_data(self) -> Tuple[Dict[str, np.ndarray], np.ndarray, np.ndarray]:
+        return histories_arr, impression_ids_arr, labels_arr, masks_arr
+
+    def get_train_val_data(
+        self,
+    ) -> Tuple[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]], Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],]:
         """Load and process training data"""
-        train_dir = self.dataset_path / "train"
-
-        # Load news data
+        # Process news data
         news_df = pd.read_csv(
-            train_dir / "news.tsv",
+            self.dataset_path / "train" / "news.tsv",
             sep="\t",
             header=None,
             names=[
@@ -254,30 +372,66 @@ class MINDDataset:
                 "abstract_entities",
             ],
         )
-        news_data = self.process_news(news_df)
+        self.news_data = self.process_news(news_df)  # Store all news features
 
-        # Create news ID mapping
-        news_dict = {nid: idx for idx, nid in enumerate(news_data["news_ids"])}
-
-        # Load behaviors
+        # Process behaviors
         behaviors_df = pd.read_csv(
-            train_dir / "behaviors.tsv",
+            self.dataset_path / "train" / "behaviors.tsv",
             sep="\t",
             header=None,
             names=["impression_id", "user_id", "time", "history", "impressions"],
         )
+        # Convert time to datetime
+        behaviors_df["time"] = pd.to_datetime(behaviors_df["time"])
 
-        histories, labels = self.process_behaviors(behaviors_df, news_dict)
+        # Split into train and validation based on the last day
+        last_day = behaviors_df["time"].max().date()
+        train_behaviors = behaviors_df[behaviors_df["time"].dt.date < last_day]
+        val_behaviors = behaviors_df[behaviors_df["time"].dt.date == last_day]
 
-        return news_data, histories, labels
+        logger.info(f"Train behaviors: {len(train_behaviors):,}")
+        logger.info(f"Validation behaviors: {len(val_behaviors):,}")
 
-    def get_validation_data(self) -> Tuple[Dict[str, np.ndarray], np.ndarray, np.ndarray]:
-        """Load and process validation data"""
-        valid_dir = self.dataset_path / "valid"
+        # Process train behaviors
+        train_histories, train_impressions, train_labels, train_masks = self.process_behaviors(
+            train_behaviors,
+            {nid: idx for idx, nid in enumerate(self.news_data["news_ids"])},
+            stage="train",
+        )
 
-        # Similar to get_train_data()
+        # Store train behaviors data
+        self.behaviors_data = {
+            "histories": train_histories,
+            "impressions": train_impressions,
+            "labels": train_labels,
+            "masks": train_masks,
+        }
+        self.n_behaviors = len(train_behaviors)
+
+        # Process validation behaviors
+        val_histories, val_impressions, val_labels, val_masks = self.process_behaviors(
+            val_behaviors,
+            {nid: idx for idx, nid in enumerate(self.news_data["news_ids"])},
+            stage="validation",
+        )
+
+        # Store validation behaviors data
+        self.val_behaviors_data = {
+            "histories": val_histories,
+            "impressions": val_impressions,
+            "labels": val_labels,
+            "masks": val_masks,
+        }
+        self.n_val_behaviors = len(val_behaviors)
+
+        return (self.news_data, self.behaviors_data), (self.news_data, self.val_behaviors_data)
+
+    def get_test_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+        """Load and process test data"""
+        test_dir = self.dataset_path / "valid"  # Use valid folder for testing
+
         news_df = pd.read_csv(
-            valid_dir / "news.tsv",
+            test_dir / "news.tsv",
             sep="\t",
             header=None,
             names=[
@@ -291,17 +445,28 @@ class MINDDataset:
                 "abstract_entities",
             ],
         )
-        news_data = self.process_news(news_df)
-
-        news_dict = {nid: idx for idx, nid in enumerate(news_data["news_ids"])}
+        self.test_news_data = self.process_news(news_df)
 
         behaviors_df = pd.read_csv(
-            valid_dir / "behaviors.tsv",
+            test_dir / "behaviors.tsv",
             sep="\t",
             header=None,
             names=["impression_id", "user_id", "time", "history", "impressions"],
         )
 
-        histories, labels = self.process_behaviors(behaviors_df, news_dict)
+        test_histories, test_impressions, test_labels, test_masks = self.process_behaviors(
+            behaviors_df,
+            {nid: idx for idx, nid in enumerate(self.test_news_data["news_ids"])},
+            stage="test",
+        )
 
-        return news_data, histories, labels
+        # Store test behaviors data
+        self.test_behaviors_data = {
+            "histories": test_histories,
+            "impressions": test_impressions,
+            "labels": test_labels,
+            "masks": test_masks,
+        }
+        self.n_test_behaviors = len(behaviors_df)
+
+        return self.test_news_data, self.test_behaviors_data

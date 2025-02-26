@@ -5,46 +5,41 @@ import tensorflow as tf
 from tensorflow.keras import Model
 
 
-class BaseNewsRecommender(Model, ABC):
-    """Abstract base class for all news recommendation models."""
+class BaseNewsRecommender(Model):
+    """Base class for news recommendation models"""
 
-    def __init__(self, cfg: Dict[str, Any], **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self.cfg = cfg
 
-    @abstractmethod
-    def encode_news(self, news_input: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
-        """Encode news articles into vectors."""
-        pass
+    def train_step(self, data: Tuple[tf.Tensor, tf.Tensor]) -> Dict[str, tf.Tensor]:
+        """Custom training step"""
+        x, y = data
 
-    @abstractmethod
-    def encode_user(self, history_input: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
-        """Encode user history into user vector."""
-        pass
+        with tf.GradientTape() as tape:
+            y_pred = self(x, training=True)
+            loss = self.compiled_loss(y, y_pred)
 
-    def call(
-        self, inputs: Tuple[tf.Tensor, tf.Tensor], training: Optional[bool] = None
-    ) -> tf.Tensor:
-        """Forward pass of the model."""
-        news_input, history_input = inputs
+        # Compute gradients
+        trainable_vars = self.trainable_variables
+        gradients = tape.gradient(loss, trainable_vars)
 
-        # Encode candidate news
-        news_vector = self.encode_news(news_input, training=training)
+        # Update weights
+        self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
-        # Encode user from history
-        user_vector = self.encode_user(history_input, training=training)
+        # Update metrics
+        self.compiled_metrics.update_state(y, y_pred)
 
-        # Calculate click probability
-        click_probability = self.calculate_click_probability(news_vector, user_vector)
+        return {m.name: m.result() for m in self.metrics}
 
-        return click_probability
+    def test_step(self, data: Tuple[tf.Tensor, tf.Tensor]) -> Dict[str, tf.Tensor]:
+        """Custom test step"""
+        x, y = data
+        y_pred = self(x, training=False)
 
-    def calculate_click_probability(
-        self, news_vector: tf.Tensor, user_vector: tf.Tensor
-    ) -> tf.Tensor:
-        """Calculate probability of user clicking the news."""
-        logits = tf.reduce_sum(news_vector * user_vector, axis=1)
-        return tf.nn.sigmoid(logits)
+        # Update metrics
+        self.compiled_metrics.update_state(y, y_pred)
+
+        return {m.name: m.result() for m in self.metrics}
 
 
 class BaseNewsEncoder(tf.keras.layers.Layer, ABC):

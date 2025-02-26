@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import tensorflow as tf
@@ -33,7 +33,10 @@ class NewsRecommenderMetrics:
 
     @staticmethod
     def group_metrics(
-        y_true: np.ndarray, y_pred: np.ndarray, impression_ids: List[str]
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        impression_ids: List[str],
+        masks: Optional[np.ndarray] = None,
     ) -> Dict[str, float]:
         """Calculate metrics for grouped impressions"""
         unique_impressions = np.unique(impression_ids)
@@ -41,14 +44,14 @@ class NewsRecommenderMetrics:
 
         for imp_id in unique_impressions:
             mask = impression_ids == imp_id
+            if masks is not None:
+                # Apply additional mask for padded values
+                mask = mask & (masks[mask] == 1)
+
             if np.sum(y_true[mask]) > 0:  # Only consider impressions with positive samples
                 metrics["auc"].append(NewsRecommenderMetrics.auc(y_true[mask], y_pred[mask]))
                 metrics["mrr"].append(NewsRecommenderMetrics.mrr(y_true[mask], y_pred[mask]))
-                metrics["ndcg@5"].append(
-                    NewsRecommenderMetrics.ndcg(y_true[mask], y_pred[mask], k=5)
-                )
-                metrics["ndcg@10"].append(
-                    NewsRecommenderMetrics.ndcg(y_true[mask], y_pred[mask], k=10)
-                )
+                metrics["ndcg@5"].append(NewsRecommenderMetrics.ndcg(y_true[mask], y_pred[mask], k=5))
+                metrics["ndcg@10"].append(NewsRecommenderMetrics.ndcg(y_true[mask], y_pred[mask], k=10))
 
         return {k: np.mean(v) for k, v in metrics.items()}

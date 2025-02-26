@@ -14,7 +14,7 @@ repos:
     hooks:
     -   id: black
         language_version: python3
-        args: [--line-length=100]
+        args: [--line-length=130]
 
 -   repo: https://github.com/pycqa/isort
     rev: 5.12.0
@@ -28,7 +28,7 @@ repos:
     -   id: flake8
         additional_dependencies: [flake8-docstrings]
         args: [
-            "--max-line-length=100",
+            "--max-line-length=130",
             "--docstring-convention=google",
             "--ignore=D100,D104,W503,D415,D107,D101,D102,D103,E203"  # Added E203 to ignore list
         ]

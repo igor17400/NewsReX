@@ -1,11 +1,12 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Iterator, Tuple
 
 import hydra
 import tensorflow as tf
 import wandb
 from omegaconf import DictConfig, OmegaConf
+from tqdm import tqdm
 
 from utils.metrics import NewsRecommenderMetrics
 
@@ -36,14 +37,23 @@ def create_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
 def train_step(
     model: tf.keras.Model,
     optimizer: tf.keras.optimizers.Optimizer,
-    news_input: Dict[str, tf.Tensor],
-    history_input: tf.Tensor,
+    inputs: Tuple[Dict[str, tf.Tensor], Dict[str, tf.Tensor]],
     labels: tf.Tensor,
+    masks: tf.Tensor,
 ) -> Tuple[float, tf.Tensor]:
     """Single training step"""
     with tf.GradientTape() as tape:
-        predictions = model((news_input, history_input), training=True)
-        loss = tf.keras.losses.binary_crossentropy(labels, predictions)
+        predictions = model(inputs, training=True)  # [batch_size, num_impressions]
+
+        # Normalize labels to create probability distribution
+        label_probs = labels / tf.reduce_sum(labels * tf.cast(masks, tf.float32), axis=1, keepdims=True)
+
+        # Calculate categorical cross entropy
+        rank_loss_fn = tf.keras.losses.CategoricalCrossentropy(from_logits=False)
+        losses = rank_loss_fn(label_probs, predictions)  # [batch_size]
+
+        # Apply mask and compute mean
+        loss = tf.reduce_mean(losses)
 
     # Compute and apply gradients
     gradients = tape.gradient(loss, model.trainable_variables)
@@ -52,21 +62,40 @@ def train_step(
     return loss, predictions
 
 
+def get_num_batches(dataset_size: int, batch_size: int) -> int:
+    """Calculate number of batches per epoch"""
+    return (dataset_size + batch_size - 1) // batch_size
+
+
 def validate(
-    model: tf.keras.Model, val_data: Tuple, metrics: NewsRecommenderMetrics
+    model: tf.keras.Model,
+    val_dataloader: Iterator,
+    metrics: NewsRecommenderMetrics,
 ) -> Dict[str, float]:
     """Run validation and compute metrics"""
-    news_input, history_input, labels, impression_ids = val_data
+    all_labels = []
+    all_predictions = []
+    all_masks = []
 
-    predictions = model((news_input, history_input), training=False)
+    # Progress bar for validation
+    for inputs, labels, masks in tqdm(val_dataloader, desc="Validating", leave=False):
+        predictions = model(inputs, training=False)
+        all_labels.append(labels)
+        all_predictions.append(predictions)
+        all_masks.append(masks)
+
+    # Concatenate all batches
+    labels = tf.concat(all_labels, axis=0)
+    predictions = tf.concat(all_predictions, axis=0)
+    masks = tf.concat(all_masks, axis=0)
 
     # Compute metrics
-    metric_values = metrics.group_metrics(labels, predictions, impression_ids)
+    metric_values = metrics.group_metrics(labels, predictions, masks=masks)
 
     return metric_values
 
 
-@hydra.main(config_path="../configs", config_name="config")
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
 def train(cfg: DictConfig) -> None:
     """Main training loop."""
     # Setup
@@ -82,27 +111,38 @@ def train(cfg: DictConfig) -> None:
     # Create optimizer
     optimizer = tf.keras.optimizers.Adam(learning_rate=cfg.train.learning_rate)
 
-    # Get training and validation data
-    news_input, history_input, labels = dataset.get_train_data()  # Use the values directly
-    val_data = dataset.get_validation_data()
-
     # Create metrics
     metrics = NewsRecommenderMetrics()
+
+    # Calculate total number of batches per epoch
+    num_batches_per_epoch = get_num_batches(dataset.n_behaviors, cfg.train.batch_size)
 
     # Training loop
     best_val_auc: float = 0.0
     patience_counter: int = 0
 
-    for epoch in range(cfg.train.num_epochs):
+    # Progress bar for epochs
+    epoch_pbar = tqdm(range(cfg.train.num_epochs), desc="Training epochs")
+    for epoch in epoch_pbar:
         total_loss: float = 0.0
         num_batches: int = 0
 
-        for batch in dataset.train_dataloader(cfg.train.batch_size):
-            news_input, history_input, labels = batch
-            loss, predictions = train_step(model, optimizer, news_input, history_input, labels)
+        # Progress bar for batches
+        batch_pbar = tqdm(
+            dataset.train_dataloader(cfg.train.batch_size),
+            total=num_batches_per_epoch,
+            desc=f"Epoch {epoch+1}/{cfg.train.num_epochs}",
+            leave=False,
+        )
+        for batch in batch_pbar:
+            inputs, labels, masks = batch
+            loss, _ = train_step(model, optimizer, inputs, labels, masks)
 
             total_loss += loss
             num_batches += 1
+
+            # Update batch progress bar
+            batch_pbar.set_postfix({"loss": f"{loss:.4f}"})
 
             if num_batches % cfg.logging.log_every_n_steps == 0:
                 logger.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f}")
@@ -112,7 +152,10 @@ def train(cfg: DictConfig) -> None:
         avg_loss = total_loss / num_batches
 
         # Validation
-        val_metrics = validate(model, val_data, metrics)
+        val_metrics = validate(model, dataset.val_dataloader(cfg.train.batch_size), metrics)
+
+        # Update epoch progress bar
+        epoch_pbar.set_postfix({"loss": f"{avg_loss:.4f}", "val_auc": f"{val_metrics['auc']:.4f}"})
 
         # Logging
         logger.info(f"Epoch {epoch}")

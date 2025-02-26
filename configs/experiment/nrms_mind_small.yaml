@@ -1,6 +1,7 @@
 # @package _global_
 
 defaults:
+  - /sampling: base
   - override /model: nrms
   - override /dataset: mind
   - _self_
@@ -17,9 +18,9 @@ dataset:
 
 # Model specific
 model:
-  word_embedding_dim: 300
-  num_attention_heads: 16
-  query_vector_dim: 200
+  multiheads: 16
+  head_dim: 20
+  attention_hidden_dim: 200
   dropout_rate: 0.2
 
 # Training parameters
@@ -34,3 +35,8 @@ logging:
   enable_wandb: false
   project_name: "keras-news-recsys"
   experiment_name: ${name}
+
+# Sampling configuration (optional overrides)
+sampling:
+  max_impressions_length: 5
+  strategy: "random"
