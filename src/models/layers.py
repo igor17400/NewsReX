@@ -220,19 +220,30 @@ class SelfAttention(layers.Layer):
         else:
             raise ValueError("QKVs must be a tuple of length 3 or 5.")
 
-        Q_seq = tf.matmul(Q_seq, self.WQ)
+        # Store original dtype
+        orig_dtype = Q_seq.dtype
+
+        # Cast inputs and weights to float32 for stable computation
+        Q_seq = tf.cast(Q_seq, tf.float32)
+        K_seq = tf.cast(K_seq, tf.float32)
+        V_seq = tf.cast(V_seq, tf.float32)
+        WQ = tf.cast(self.WQ, tf.float32)
+        WK = tf.cast(self.WK, tf.float32)
+        WV = tf.cast(self.WV, tf.float32)
+
+        Q_seq = tf.matmul(Q_seq, WQ)
         Q_seq = tf.reshape(Q_seq, shape=(-1, tf.shape(Q_seq)[1], self.multiheads, self.head_dim))
         Q_seq = tf.transpose(Q_seq, perm=(0, 2, 1, 3))
 
-        K_seq = tf.matmul(K_seq, self.WK)
+        K_seq = tf.matmul(K_seq, WK)
         K_seq = tf.reshape(K_seq, shape=(-1, tf.shape(K_seq)[1], self.multiheads, self.head_dim))
         K_seq = tf.transpose(K_seq, perm=(0, 2, 1, 3))
 
-        V_seq = tf.matmul(V_seq, self.WV)
+        V_seq = tf.matmul(V_seq, WV)
         V_seq = tf.reshape(V_seq, shape=(-1, tf.shape(V_seq)[1], self.multiheads, self.head_dim))
         V_seq = tf.transpose(V_seq, perm=(0, 2, 1, 3))
 
-        A = tf.einsum("abij, abkj -> abik", Q_seq, K_seq) / tf.sqrt(tf.cast(self.head_dim, dtype="float32"))
+        A = tf.einsum("abij, abkj -> abik", Q_seq, K_seq) / tf.sqrt(tf.cast(self.head_dim, dtype=tf.float32))
         A = tf.transpose(A, perm=(0, 3, 2, 1))
 
         A = self.Mask(A, V_len, "add")
@@ -250,7 +261,9 @@ class SelfAttention(layers.Layer):
 
         O_seq = tf.reshape(O_seq, shape=(-1, tf.shape(O_seq)[1], self.output_dim))
         O_seq = self.Mask(O_seq, Q_len, "mul")
-        return O_seq
+
+        # Cast back to original dtype before returning
+        return tf.cast(O_seq, orig_dtype)
 
     def get_config(self) -> Dict[str, Any]:
         """Add multiheads, head_dim, and mask_right into layer config.

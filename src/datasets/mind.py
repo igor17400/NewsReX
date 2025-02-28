@@ -1,4 +1,5 @@
 import logging
+import pickle
 import urllib.request
 import zipfile
 from typing import Dict, Iterator, Tuple
@@ -7,19 +8,18 @@ import numpy as np
 import pandas as pd
 from omegaconf import DictConfig
 from rich.console import Console
-from rich.logging import RichHandler
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 from tensorflow.keras.preprocessing.text import Tokenizer
 
 from datasets.base import BaseNewsDataset
 from utils.cache_manager import CacheManager
 from utils.embeddings import EmbeddingsManager
+from utils.logging import setup_logging
 from utils.sampling import ImpressionSampler
 
-# Set up rich logging
-logging.basicConfig(level="INFO", format="%(message)s", datefmt="[%X]", handlers=[RichHandler(rich_tracebacks=True)])
-
-logger = logging.getLogger("mind_dataset")
+# Setup logging
+setup_logging()
+logger = logging.getLogger(__name__)
 console = Console()
 
 
@@ -40,6 +40,7 @@ class MINDDataset(BaseNewsDataset):
         embedding_type: str = "glove",
         embedding_size: int = 300,
         sampling: DictConfig = None,
+        data_fraction: float = 0.005,
     ):
         super().__init__()  # Initialize base class with no arguments
         self.name = name
@@ -57,6 +58,7 @@ class MINDDataset(BaseNewsDataset):
         self.embedding_size = embedding_size
         self.embeddings_manager = EmbeddingsManager(self.cache_manager)
         self.sampler = ImpressionSampler(sampling) if sampling else None
+        self.data_fraction = data_fraction
 
         logger.info(f"Initializing MIND dataset ({version} version)")
         logger.info(f"Data will be stored in: {self.dataset_path}")
@@ -72,6 +74,20 @@ class MINDDataset(BaseNewsDataset):
 
     def _load_data(self) -> None:
         """Load and process all data."""
+        # Check if processed data exists
+        processed_data_path = self.dataset_path / "processed_data.pkl"
+        if processed_data_path.exists():
+            logger.info("Loading processed data from disk...")
+            with open(processed_data_path, "rb") as f:
+                self.news_data, self.behaviors_data, self.val_behaviors_data = pickle.load(f)
+            logger.info("Processed data loaded successfully.")
+
+            # Apply data fraction to reduce dataset size for testing
+            if self.data_fraction < 1.0:
+                self._apply_data_fraction()
+
+            return
+
         # Download dataset if needed
         self.download_dataset()
 
@@ -87,9 +103,15 @@ class MINDDataset(BaseNewsDataset):
         # Load train and validation data
         (self.news_data, self.behaviors_data), (_, self.val_behaviors_data) = self.get_train_val_data()
 
-        # Set number of behaviors
-        self.n_behaviors = len(self.behaviors_data["histories"])
-        logger.info(f"Loaded {self.n_behaviors:,} training behaviors")
+        # Apply data fraction to reduce dataset size for testing
+        if self.data_fraction < 1.0:
+            self._apply_data_fraction()
+
+        # Save processed data
+        logger.info("Saving processed data to disk...")
+        with open(processed_data_path, "wb") as f:
+            pickle.dump((self.news_data, self.behaviors_data, self.val_behaviors_data), f)
+        logger.info("Processed data saved successfully.")
 
     def download_dataset(self) -> None:
         """Download and extract MIND dataset if not already present"""
@@ -162,10 +184,9 @@ class MINDDataset(BaseNewsDataset):
             filters='!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
         )
 
-        # Load training news
-        train_dir = self.dataset_path / "train"
-        news_df = pd.read_csv(
-            train_dir / "news.tsv",
+        # Read news data from both "train" and "valid" directories
+        train_news_df = pd.read_csv(
+            self.dataset_path / "train" / "news.tsv",
             sep="\t",
             header=None,
             names=[
@@ -179,6 +200,25 @@ class MINDDataset(BaseNewsDataset):
                 "abstract_entities",
             ],
         )
+
+        valid_news_df = pd.read_csv(
+            self.dataset_path / "valid" / "news.tsv",
+            sep="\t",
+            header=None,
+            names=[
+                "id",
+                "category",
+                "subcategory",
+                "title",
+                "abstract",
+                "url",
+                "title_entities",
+                "abstract_entities",
+            ],
+        )
+
+        # Concatenate the news data from both directories
+        news_df = pd.concat([train_news_df, valid_news_df], ignore_index=True)
 
         # Combine title and abstract text
         texts = []
@@ -281,8 +321,6 @@ class MINDDataset(BaseNewsDataset):
               which positions in the impression list are valid (1) and which are padded (0).
         """
         logger.info(f"Processing user behaviors for {stage} data...")
-        # Store number of behaviors
-        self.n_behaviors = len(behaviors_df)
 
         histories = []
         impression_ids = []
@@ -373,7 +411,7 @@ class MINDDataset(BaseNewsDataset):
 
     def get_train_val_data(
         self,
-    ) -> Tuple[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]], Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],]:
+    ) -> Tuple[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]], Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]]:
         """Load and process training data"""
         # Process news data
         news_df = pd.read_csv(
@@ -425,7 +463,6 @@ class MINDDataset(BaseNewsDataset):
             "labels": train_labels,
             "masks": train_masks,
         }
-        self.n_behaviors = len(train_behaviors)
 
         # Process validation behaviors
         val_histories, val_impressions, val_labels, val_masks = self.process_behaviors(
@@ -441,7 +478,6 @@ class MINDDataset(BaseNewsDataset):
             "labels": val_labels,
             "masks": val_masks,
         }
-        self.n_val_behaviors = len(val_behaviors)
 
         return (self.news_data, self.behaviors_data), (self.news_data, self.val_behaviors_data)
 
@@ -580,3 +616,25 @@ class MINDDataset(BaseNewsDataset):
             }
 
             yield (impression_news, history_news), impression_labels, impression_masks
+
+    def _apply_data_fraction(self) -> None:
+        """Reduce the dataset size based on the data_fraction parameter."""
+        logger.info(f"Using {self.data_fraction * 100:.0f}% of the dataset for testing purposes.")
+
+        def reduce_data(data_dict: Dict[str, np.ndarray]) -> None:
+            """Select data"""
+            for key in data_dict:
+                data_dict[key] = data_dict[key][: int(len(data_dict[key]) * self.data_fraction)]
+
+        reduce_data(self.behaviors_data)
+        reduce_data(self.val_behaviors_data)
+
+    @property
+    def n_val_behaviors(self) -> int:
+        """Number of validation behaviors"""
+        return len(self.val_behaviors_data["labels"]) if hasattr(self, "val_behaviors_data") else 0
+
+    @property
+    def n_behaviors(self) -> int:
+        """Number of training behaviors"""
+        return len(self.behaviors_data["labels"]) if hasattr(self, "behaviors_data") else 0

@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, Tuple
 
@@ -6,11 +7,31 @@ import hydra
 import tensorflow as tf
 import wandb
 from omegaconf import DictConfig, OmegaConf
-from tqdm import tqdm
+from rich.console import Console
+from rich.logging import RichHandler
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
+from utils.device import setup_device
+from utils.logging import setup_logging
 from utils.metrics import NewsRecommenderMetrics
 
+# Set TensorFlow logging level
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
+# Setup logging
+setup_logging()
 logger = logging.getLogger(__name__)
+
+console = Console()
+rich_handler = RichHandler(console=console, rich_tracebacks=True, show_time=True)
 
 
 def setup_wandb(cfg: DictConfig) -> None:
@@ -71,18 +92,30 @@ def validate(
     model: tf.keras.Model,
     val_dataloader: Iterator,
     metrics: NewsRecommenderMetrics,
+    num_val_batches: int,
 ) -> Dict[str, float]:
     """Run validation and compute metrics"""
     all_labels = []
     all_predictions = []
     all_masks = []
 
-    # Progress bar for validation
-    for inputs, labels, masks in tqdm(val_dataloader, desc="Validating", leave=False):
-        predictions = model(inputs, training=False)
-        all_labels.append(labels)
-        all_predictions.append(predictions)
-        all_masks.append(masks)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        expand=True,
+    ) as progress:
+        validate_task = progress.add_task("[cyan]Validating", total=num_val_batches)
+
+        for inputs, labels, masks in val_dataloader:
+            predictions = model(inputs, training=False)
+            all_labels.append(labels)
+            all_predictions.append(predictions)
+            all_masks.append(masks)
+            progress.advance(validate_task)
 
     # Concatenate all batches
     labels = tf.concat(all_labels, axis=0)
@@ -98,9 +131,17 @@ def validate(
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def train(cfg: DictConfig) -> None:
     """Main training loop."""
+    logger.info("🚀 Starting training...")
+    logger.info("⚙️ Configuring devices...")
+    print("------- OIIII ----------")
+    return
+
+    # Setup devices first
+    setup_device(gpu_ids=cfg.device.gpu_ids, memory_limit=cfg.device.memory_limit, mixed_precision=cfg.device.mixed_precision)
+
     # Setup
     setup_wandb(cfg)
-    logger.info(f"Configuration:\n{OmegaConf.to_yaml(cfg)}")
+    logger.info(f"📋 Configuration:\n{OmegaConf.to_yaml(cfg)}")
 
     # Set random seeds
     tf.random.set_seed(cfg.seed)
@@ -114,77 +155,78 @@ def train(cfg: DictConfig) -> None:
     # Create metrics
     metrics = NewsRecommenderMetrics()
 
-    # Calculate total number of batches per epoch
-    num_batches_per_epoch = get_num_batches(dataset.n_behaviors, cfg.train.batch_size)
+    # Calculate number of batches
+    num_train_batches = get_num_batches(dataset.n_behaviors, cfg.train.batch_size)
+    logger.info(f"Number of train batches: {num_train_batches}.")
+    num_val_batches = get_num_batches(dataset.n_val_behaviors, cfg.train.batch_size)
+    logger.info(f"Number of validation batches: {num_val_batches}.")
 
     # Training loop
     best_val_auc: float = 0.0
     patience_counter: int = 0
 
-    # Progress bar for epochs
-    epoch_pbar = tqdm(range(cfg.train.num_epochs), desc="Training epochs")
-    for epoch in epoch_pbar:
-        total_loss: float = 0.0
-        num_batches: int = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        expand=True,
+    ) as progress:
+        # Main training progress
+        epochs_task = progress.add_task(f"[green]Training for {cfg.train.num_epochs} epochs", total=cfg.train.num_epochs)
 
-        # Progress bar for batches
-        batch_pbar = tqdm(
-            dataset.train_dataloader(cfg.train.batch_size),
-            total=num_batches_per_epoch,
-            desc=f"Epoch {epoch+1}/{cfg.train.num_epochs}",
-            leave=False,
-        )
-        for batch in batch_pbar:
-            inputs, labels, masks = batch
-            loss, _ = train_step(model, optimizer, inputs, labels, masks)
+        for epoch in range(cfg.train.num_epochs):
+            total_loss: float = 0.0
+            num_batches: int = 0
 
-            total_loss += loss
-            num_batches += 1
+            # Batch progress with total count
+            batch_task = progress.add_task(f"[yellow]Epoch {epoch+1}/{cfg.train.num_epochs}", total=num_train_batches)
 
-            # Update batch progress bar
-            batch_pbar.set_postfix({"loss": f"{loss:.4f}"})
+            for batch in dataset.train_dataloader(cfg.train.batch_size):
+                inputs, labels, masks = batch
+                loss, _ = train_step(model, optimizer, inputs, labels, masks)
 
-            if num_batches % cfg.logging.log_every_n_steps == 0:
-                logger.info(f"Epoch {epoch}, Batch {num_batches}, Loss: {loss:.4f}")
-                if cfg.logging.enable_wandb:
-                    wandb.log({"train/loss": loss, "train/step": epoch * num_batches})
+                total_loss += loss
+                num_batches += 1
 
-        avg_loss = total_loss / num_batches
+                # Update batch progress
+                progress.update(batch_task, advance=1)
 
-        # Validation
-        val_metrics = validate(model, dataset.val_dataloader(cfg.train.batch_size), metrics)
+                if num_batches % cfg.logging.log_every_n_steps == 0:
+                    logger.info(f"Epoch {epoch}, Batch {num_batches}/{num_train_batches}, Loss: {loss:.4f}")
+                    if cfg.logging.enable_wandb:
+                        wandb.log({"train/loss": loss, "train/step": epoch * num_batches})
 
-        # Update epoch progress bar
-        epoch_pbar.set_postfix({"loss": f"{avg_loss:.4f}", "val_auc": f"{val_metrics['auc']:.4f}"})
+            avg_loss = total_loss / num_batches
 
-        # Logging
-        logger.info(f"Epoch {epoch}")
-        logger.info(f"Average Loss: {avg_loss:.4f}")
-        logger.info("Validation Metrics:")
-        for metric_name, value in val_metrics.items():
-            logger.info(f"{metric_name}: {value:.4f}")
+            # Validation with batch count
+            val_metrics = validate(model, dataset.val_dataloader(cfg.train.batch_size), metrics, num_val_batches)
 
-        if cfg.logging.enable_wandb:
-            wandb.log(
-                {
-                    "train/epoch_loss": avg_loss,
-                    "epoch": epoch,
-                    **{f"val/{k}": v for k, v in val_metrics.items()},
-                }
-            )
+            # Log metrics
+            logger.info(f"Epoch {epoch}")
+            logger.info(f"Average Loss: {avg_loss:.4f}")
+            logger.info("Validation Metrics:")
+            for metric_name, value in val_metrics.items():
+                logger.info(f"{metric_name}: {value:.4f}")
 
-        # Early stopping
-        if val_metrics["auc"] > best_val_auc:
-            best_val_auc = val_metrics["auc"]
-            patience_counter = 0
-            # Save best model
-            model_path = Path(cfg.train.model_dir) / f"{cfg.model._target_}_best.h5"
-            model.save_weights(model_path)
-        else:
-            patience_counter += 1
-            if patience_counter >= cfg.train.early_stopping_patience:
-                logger.info("Early stopping triggered")
-                break
+            # Early stopping logic
+            if val_metrics["auc"] > best_val_auc:
+                best_val_auc = val_metrics["auc"]
+                patience_counter = 0
+                model_path = Path(cfg.train.model_dir) / f"{cfg.model._target_}_best.h5"
+                model.save_weights(model_path)
+            else:
+                patience_counter += 1
+                if patience_counter >= cfg.train.early_stopping_patience:
+                    logger.info("Early stopping triggered")
+                    break
+
+            # Update epoch progress
+            progress.update(epochs_task, advance=1)
+            # Instead of removing the task, just update its description
+            progress.update(batch_task, description=f"[blue]Completed Epoch {epoch+1}")
 
     if cfg.logging.enable_wandb:
         wandb.finish()

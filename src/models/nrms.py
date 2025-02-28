@@ -39,6 +39,21 @@ class NewsEncoder(layers.Layer):
         self.additive_attention = AttLayer2(attention_hidden_dim, seed=seed)
         self.dropout = layers.Dropout(dropout_rate)
 
+    def build(self, input_shape: tf.TensorShape) -> None:
+        """Build the layer's weights when Keras knows the input shape.
+
+        Args:
+            input_shape: Shape of input tensor [batch_size, seq_length, embedding_dim]
+        """
+        # Build sublayers
+        self.multihead_attention.build([input_shape] * 3)  # Q, K, V have same shape
+
+        # Get output shape from multihead attention for additive attention
+        multihead_output_shape = self.multihead_attention.compute_output_shape([input_shape] * 3)
+        self.additive_attention.build(multihead_output_shape)
+
+        self.built = True
+
     def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
         """Process title embeddings.
 

@@ -2,8 +2,12 @@
 
 defaults:
   - /sampling/base
+  - _self_
   - override /model: nrms
   - override /dataset: mind
+
+# Add seed back at root level
+seed: 42  # Global seed for reproducibility
 
 # Experiment name
 name: "nrms_mind_small"
@@ -15,7 +19,6 @@ dataset:
   version: "small"
   max_title_length: 30
   max_history_length: 50
-  random_seed: 42
 
 # Model specific
 model:
@@ -27,7 +30,7 @@ model:
 # Training parameters
 train:
   batch_size: 32
-  num_epochs: 10
+  num_epochs: 2
   learning_rate: 0.0001
   early_stopping_patience: 5
 

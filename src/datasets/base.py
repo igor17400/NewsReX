@@ -12,7 +12,6 @@ class BaseNewsDataset(ABC):
     """Abstract base class for news recommendation datasets"""
 
     def __init__(self) -> None:
-        self.n_behaviors = 0  # Track number of behaviors
         self.news_data: Dict[str, np.ndarray] = {}  # Store news features
         self.behaviors_data: Dict[str, np.ndarray] = {}  # Store behaviors data
         self.val_behaviors_data: Dict[str, np.ndarray] = {}  # Store validation behaviors data

@@ -9,9 +9,9 @@ defaults:
 # Basic configuration (fallback values if not specified in experiment)
 seed: 42
 device:
-  gpu_ids: [0]  # List of GPU IDs to use, empty list for CPU
-  memory_limit: 0.9  # Fraction of GPU memory to allocate
-  mixed_precision: true  # Whether to use mixed precision training
+  gpu_ids: [0]  # Use all 4 GPUs
+  memory_limit: 1  # Use 100% of each GPU's memory
+  mixed_precision: true
 num_workers: 4
 
 # Default training parameters (can be overridden by experiment)
