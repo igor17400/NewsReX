@@ -276,11 +276,11 @@ def train(cfg: DictConfig) -> None:
             progress.update(epochs_task, advance=1)
 
         # Display best validation metrics
-        console.log("\n[bold cyan]Best Validation Metrics:")
-        console.log(f"[bold green]Best Epoch: {best_metrics['epoch']}")
+        print("\nBest Validation Metrics:")
+        print(f"Best Epoch: {best_metrics['epoch']}")
         for metric_name, value in best_metrics.items():
             if metric_name != "epoch":
-                console.log(f"[bold blue]{metric_name}: {value:.4f}")
+                print(f"{metric_name}: {value:.4f}")
 
         if best_checkpoint_time:
             best_model_path = (
@@ -306,9 +306,9 @@ def train(cfg: DictConfig) -> None:
                 )
 
                 # Display test metrics
-                console.log("\n[bold cyan]Test Metrics:")
+                print("\nTest Metrics:")
                 for metric_name, value in test_metrics.items():
-                    console.log(f"[bold blue]{metric_name}: {value:.4f}")
+                    print(f"{metric_name}: {value:.4f}")
 
                 # Save all metrics to file
                 metrics_path = model_dir / "metrics.json"
