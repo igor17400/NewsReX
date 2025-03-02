@@ -39,19 +39,34 @@ class NewsRecommenderMetrics:
         masks: Optional[np.ndarray] = None,
     ) -> Dict[str, float]:
         """Calculate metrics for grouped impressions"""
-        unique_impressions = np.unique(impression_ids)
         metrics: Dict[str, List[float]] = {"auc": [], "mrr": [], "ndcg@5": [], "ndcg@10": []}
-
+        
+        # Convert tensors to numpy arrays if needed
+        y_true = y_true.numpy() if hasattr(y_true, 'numpy') else y_true
+        y_pred = y_pred.numpy() if hasattr(y_pred, 'numpy') else y_pred
+        masks = masks.numpy() if hasattr(masks, 'numpy') else masks
+        
+        unique_impressions = np.unique(impression_ids)
+        
         for imp_id in unique_impressions:
-            mask = impression_ids == imp_id
-            if masks is not None:
-                # Apply additional mask for padded values
-                mask = mask & (masks[mask] == 1)
+            # Find indices for this impression ID
+            indices = [i for i, x in enumerate(impression_ids) if x == imp_id]
+            
+            # Get data for this impression
+            imp_true = y_true[indices]
+            imp_pred = y_pred[indices]
+            imp_mask = masks[indices] if masks is not None else None
+            
+            if imp_mask is not None:
+                # Apply mask
+                valid_positions = imp_mask == 1
+                imp_true = imp_true[valid_positions]
+                imp_pred = imp_pred[valid_positions]
+            
+            if np.sum(imp_true) > 0:  # Only consider impressions with positive samples
+                metrics["auc"].append(NewsRecommenderMetrics.auc(imp_true, imp_pred))
+                metrics["mrr"].append(NewsRecommenderMetrics.mrr(imp_true, imp_pred))
+                metrics["ndcg@5"].append(NewsRecommenderMetrics.ndcg(imp_true, imp_pred, k=5))
+                metrics["ndcg@10"].append(NewsRecommenderMetrics.ndcg(imp_true, imp_pred, k=10))
 
-            if np.sum(y_true[mask]) > 0:  # Only consider impressions with positive samples
-                metrics["auc"].append(NewsRecommenderMetrics.auc(y_true[mask], y_pred[mask]))
-                metrics["mrr"].append(NewsRecommenderMetrics.mrr(y_true[mask], y_pred[mask]))
-                metrics["ndcg@5"].append(NewsRecommenderMetrics.ndcg(y_true[mask], y_pred[mask], k=5))
-                metrics["ndcg@10"].append(NewsRecommenderMetrics.ndcg(y_true[mask], y_pred[mask], k=10))
-
-        return {k: np.mean(v) for k, v in metrics.items()}
+        return {k: np.mean(v) if v else 0.0 for k, v in metrics.items()}

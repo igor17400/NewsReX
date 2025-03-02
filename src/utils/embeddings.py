@@ -6,6 +6,7 @@ import requests
 import tensorflow as tf
 from rich.progress import Progress
 from transformers import BertTokenizer, TFBertModel
+import zipfile
 
 from utils.cache_manager import CacheManager
 
@@ -20,51 +21,80 @@ class EmbeddingsManager:
         self.bert_tokenizer = None
 
     def load_glove(self, dim: int = 300) -> Dict[str, np.ndarray]:
-        """Load GloVe embeddings"""
-        if self.cache_manager.is_embedding_cached("glove", dim):
-            cache_path = self.cache_manager.get_embedding_path("glove", dim)
-            embeddings_file = cache_path / "embeddings.npy"
-            logger.info(f"Loading cached GloVe embeddings from {embeddings_file}")
-            return np.load(embeddings_file, allow_pickle=True).item()  # Load as dictionary
+        """Load GloVe embeddings from disk or download if not present"""
+        path = self.cache_manager.get_embedding_path("glove", dim)
+        txt_file = path / f"glove.840B.{dim}d.txt"
+        npy_file = path / f"glove.840B.{dim}d.npy"
 
-        embeddings_dict = {}
-        url = f"https://nlp.stanford.edu/data/glove.6B.{dim}d.txt"
+        # If embeddings already loaded, return them
+        if self.glove_embeddings is not None:
+            return self.glove_embeddings
 
-        with Progress() as progress:
-            task = progress.add_task("Downloading GloVe...", total=None)
+        # Try to load from .npy if it exists
+        if npy_file.exists():
+            logger.info("Loading GloVe embeddings from .npy file...")
+            embeddings = {}
+            vectors = np.load(npy_file, allow_pickle=True).item()  # Load as dictionary
+            logger.info(f"Loaded {len(vectors):,} word vectors from .npy")
+            self.glove_embeddings = vectors
+            return vectors
 
-            response = requests.get(url, stream=True)
-            total_size = int(response.headers.get("content-length", 0))
-            progress.update(task, total=total_size)
-
-            path = self.cache_manager.get_embedding_path("glove", dim)
+        # Check if txt file exists, if not download
+        if not txt_file.exists():
+            # Download if not present
+            url = f"https://nlp.stanford.edu/data/glove.840B.{dim}d.zip"
+            zip_path = path / f"glove.840B.{dim}d.zip"
             path.mkdir(parents=True, exist_ok=True)
 
-            with open(path / "glove.txt", "wb") as f:
-                for data in response.iter_content(chunk_size=4096):
-                    f.write(data)
-                    progress.advance(task, len(data))
+            # Download the zip file
+            with Progress() as progress:
+                task = progress.add_task("Downloading GloVe...", total=None)
+                response = requests.get(url, stream=True)
+                total_size = int(response.headers.get("content-length", 0))
+                progress.update(task, total=total_size)
 
-            # Load embeddings
-            with open(path / "glove.txt", "r", encoding="utf-8") as f:
-                for line in progress.track(f, description="Loading embeddings..."):
+                with open(zip_path, "wb") as f:
+                    for data in response.iter_content(chunk_size=4096):
+                        f.write(data)
+                        progress.advance(task, len(data))
+
+            # Extract the zip file
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(path)
+                logger.info(f"Extracted GloVe embeddings to {path}")
+            
+            # Clean up zip file
+            zip_path.unlink()
+
+        # Load embeddings from txt file
+        logger.info("Loading GloVe embeddings from txt file...")
+        embeddings = {}
+        
+        with Progress() as progress:
+            file_size = txt_file.stat().st_size
+            task = progress.add_task("Loading embeddings...", total=file_size)
+            
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                for line in f:
                     try:
-                        values = line.strip().split()
-                        if len(values) != dim + 1:  # word + embedding dimensions
-                            continue
-                        word = values[0]
-                        vector = np.asarray(values[1:], dtype="float32")
-                        embeddings_dict[word] = vector
-                    except (ValueError, IndexError) as e:
-                        logger.warning(f"Skipping malformed line: {line[:50]}... Error: {e}")
+                        values = line.split()
+                        # Join all elements except the last 300 as the word
+                        word = ''.join(values[:-dim])
+                        # Take last 300 elements as the embedding
+                        vector = np.asarray(values[-dim:], dtype='float32')
+                        embeddings[word] = vector
+                        progress.advance(task, len(line.encode('utf-8')))
+                    except Exception as e:
+                        logger.warning(f"Error processing line: {line[:50]}... Error: {str(e)}")
                         continue
 
-        # Save to cache
-        cache_path = path / "embeddings.npy"
-        np.save(cache_path, embeddings_dict)
-        self.cache_manager.add_to_cache("glove", str(dim), "embedding")
-
-        return embeddings_dict
+        # Save as .npy for faster future loading
+        logger.info("Saving embeddings to .npy format...")
+        np.save(npy_file, embeddings)  # Save the entire dictionary
+        
+        logger.info(f"Loaded {len(embeddings):,} word vectors")
+        self.glove_embeddings = embeddings
+        return embeddings
 
     def load_bert(self, model_name: str = "bert-base-uncased") -> Tuple[TFBertModel, BertTokenizer]:
         """Load BERT model and tokenizer"""

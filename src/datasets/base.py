@@ -13,18 +13,14 @@ class BaseNewsDataset(ABC):
 
     def __init__(self) -> None:
         self.news_data: Dict[str, np.ndarray] = {}  # Store news features
-        self.behaviors_data: Dict[str, np.ndarray] = {}  # Store behaviors data
+        self.train_behaviors_data: Dict[str, np.ndarray] = {}  # Store training behaviors data
         self.val_behaviors_data: Dict[str, np.ndarray] = {}  # Store validation behaviors data
+        self.test_behaviors_data: Dict[str, np.ndarray] = {}  # Store test behaviors data
         self.root_dir = Path(".")  # Define root directory
 
     @abstractmethod
     def download_dataset(self) -> None:
         """Download and extract dataset files"""
-        pass
-
-    @abstractmethod
-    def build_vocabulary(self) -> None:
-        """Build vocabulary from training data"""
         pass
 
     @abstractmethod

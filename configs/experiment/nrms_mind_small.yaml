@@ -37,7 +37,7 @@ train:
 # Logging
 logging:
   enable_wandb: false
-  project_name: "keras-news-recsys"
+  project_name: "BTC"
   experiment_name: "nrms_mind_${dataset.version}"
 
 # Sampling configuration

@@ -5,7 +5,6 @@ name: "MIND"
 version: "small"  # Options: small, large
 embedding_type: "glove"  # Options: glove, bert
 embedding_size: 300  # Size of the embeddings
-root_dir: "data/MIND"
 random_seed: 42
 
 # Dataset URLs
@@ -23,10 +22,6 @@ max_title_length: 30
 max_abstract_length: 100
 max_history_length: 50
 max_impressions_length: 5
-
-# Vocabulary parameters
-min_word_freq: 3
-max_vocabulary_size: 100000
 
 # Pass sampling configuration directly
 sampling: ${sampling}

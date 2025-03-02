@@ -2,18 +2,20 @@ from typing import Any, Dict, Optional, Tuple
 
 import tensorflow as tf
 from tensorflow.keras import backend as K
-from tensorflow.keras import layers
+from tensorflow.keras.layers import (
+    Dense,
+    Dropout,
+    Layer,
+    MultiHeadAttention,
+    Softmax,
+    TimeDistributed,
+)
 
 from models.base import BaseNewsRecommender
-from models.layers import AttLayer2, SelfAttention
 
 
-class NewsEncoder(layers.Layer):
-    """News encoder with multi-head self-attention.
-
-    This encoder processes the title embeddings using multi-head self-attention
-    and additive attention mechanisms.
-    """
+class NewsEncoder(Layer):
+    """News encoder with multi-head self-attention."""
 
     def __init__(
         self,
@@ -24,61 +26,58 @@ class NewsEncoder(layers.Layer):
         seed: int = 0,
         **kwargs: Any,
     ) -> None:
-        """Initialize the NewsEncoder.
-
-        Args:
-            multiheads (int): Number of attention heads.
-            head_dim (int): Dimension of each attention head.
-            attention_hidden_dim (int): Dimension of the hidden layer in the attention mechanism.
-            dropout_rate (float): Dropout rate for regularization.
-            seed (int): Random seed for reproducibility.
-            **kwargs (Any): Additional keyword arguments for the Layer.
-        """
         super(NewsEncoder, self).__init__(**kwargs)
-        self.multihead_attention = SelfAttention(multiheads, head_dim, seed=seed)
-        self.additive_attention = AttLayer2(attention_hidden_dim, seed=seed)
-        self.dropout = layers.Dropout(dropout_rate)
-
-    def build(self, input_shape: tf.TensorShape) -> None:
-        """Build the layer's weights when Keras knows the input shape.
-
-        Args:
-            input_shape: Shape of input tensor [batch_size, seq_length, embedding_dim]
-        """
-        # Build sublayers
-        self.multihead_attention.build([input_shape] * 3)  # Q, K, V have same shape
-
-        # Get output shape from multihead attention for additive attention
-        multihead_output_shape = self.multihead_attention.compute_output_shape([input_shape] * 3)
-        self.additive_attention.build(multihead_output_shape)
-
-        self.built = True
+        
+        # Multi-head self attention
+        self.multihead_attention = MultiHeadAttention(
+            num_heads=multiheads,
+            key_dim=head_dim,
+            seed=seed
+        )
+        
+        # Additive attention
+        self.attention_dense = Dense(
+            attention_hidden_dim,
+            activation='tanh',
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+        )
+        self.attention_query = Dense(
+            1,
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+        )
+        self.attention_softmax = Softmax(axis=1)  # Softmax over sequence dimension
+        
+        # Dropout for regularization
+        self.dropout = Dropout(dropout_rate, seed=seed)
 
     def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
-        """Process title embeddings.
-
-        Args:
-            inputs (tf.Tensor): Title embeddings with shape [batch_size, seq_length, embedding_dim].
-            training (Optional[bool]): Whether the layer should behave in training mode.
-
-        Returns:
-            tf.Tensor: Encoded news vector.
-        """
-        # Process title
+        """Process title embeddings."""
+        # Apply dropout
         title_repr = self.dropout(inputs, training=training)
-        title_repr = self.multihead_attention([title_repr] * 3)  # Q, K, V are the same
+        
+        # Multi-head self attention
+        title_repr = self.multihead_attention(
+            query=title_repr,
+            key=title_repr,
+            value=title_repr
+        )
+        
+        # Apply dropout after attention
         title_repr = self.dropout(title_repr, training=training)
-        news_vector = self.additive_attention(title_repr)
-
+        
+        # Additive attention
+        attention_hidden = self.attention_dense(title_repr)
+        attention_score = self.attention_query(attention_hidden)
+        attention_weights = self.attention_softmax(attention_score)
+        
+        # Weighted sum to get final news vector
+        news_vector = tf.reduce_sum(title_repr * attention_weights, axis=1)
+        
         return news_vector
 
 
-class UserEncoder(layers.Layer):
-    """User encoder with multi-head self-attention.
-
-    This encoder processes the news vectors from the user's history using
-    multi-head self-attention and additive attention mechanisms.
-    """
+class UserEncoder(Layer):
+    """User encoder with multi-head self-attention."""
 
     def __init__(
         self,
@@ -88,35 +87,44 @@ class UserEncoder(layers.Layer):
         seed: int = 0,
         **kwargs: Any,
     ) -> None:
-        """Initialize the UserEncoder.
-
-        Args:
-            multiheads (int): Number of attention heads.
-            head_dim (int): Dimension of each attention head.
-            attention_hidden_dim (int): Dimension of the hidden layer in the attention mechanism.
-            seed (int): Random seed for reproducibility.
-            **kwargs (Any): Additional keyword arguments for the Layer.
-        """
         super(UserEncoder, self).__init__(**kwargs)
-        self.multihead_attention = SelfAttention(multiheads, head_dim, seed=seed)
-        self.additive_attention = AttLayer2(attention_hidden_dim, seed=seed)
+        
+        # Multi-head self attention
+        self.multihead_attention = MultiHeadAttention(
+            num_heads=multiheads,
+            key_dim=head_dim,
+            seed=seed
+        )
+        
+        # Additive attention
+        self.attention_dense = Dense(
+            attention_hidden_dim,
+            activation='tanh',
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+        )
+        self.attention_query = Dense(
+            1,
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+        )
+        self.attention_softmax = Softmax(axis=1)
 
     def call(self, news_vecs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
-        """Process news vectors from history.
-
-        Args:
-            news_vecs (tf.Tensor): News vectors from history with shape [batch_size, history_length, news_vector_dim].
-            training (Optional[bool]): Whether the layer should behave in training mode.
-
-        Returns:
-            tf.Tensor: Encoded user vector.
-        """
+        """Process news vectors from history."""
         # Multi-head self attention
-        click_repr = self.multihead_attention([news_vecs] * 3)  # Q, K, V are the same
-
+        click_repr = self.multihead_attention(
+            query=news_vecs,
+            key=news_vecs,
+            value=news_vecs
+        )
+        
         # Additive attention
-        user_vector = self.additive_attention(click_repr)
-
+        attention_hidden = self.attention_dense(click_repr)
+        attention_score = self.attention_query(attention_hidden)
+        attention_weights = self.attention_softmax(attention_score)
+        
+        # Weighted sum to get final user vector
+        user_vector = tf.reduce_sum(click_repr * attention_weights, axis=1)
+        
         return user_vector
 
 
@@ -168,9 +176,8 @@ class NRMS(BaseNewsRecommender):
             input_shape (Tuple[Tuple[int, ...], Tuple[int, ...]]): Shapes of the input tensors for news and history.
         """
         news_shape, history_shape = input_shape
-        # Create TimeDistributed wrappers
-        self.news_encoder_td = layers.TimeDistributed(self.news_encoder)
-        self.history_encoder_td = layers.TimeDistributed(self.news_encoder)
+        self.news_encoder_td = TimeDistributed(self.news_encoder)
+        self.history_encoder_td = TimeDistributed(self.news_encoder)
         super().build(input_shape)
 
     def call(self, inputs: Tuple[Dict[str, tf.Tensor], Dict[str, tf.Tensor]], training: Optional[bool] = None) -> tf.Tensor:

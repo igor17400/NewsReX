@@ -2,6 +2,7 @@ import logging
 import pickle
 import urllib.request
 import zipfile
+import os
 from typing import Dict, Iterator, Tuple
 
 import numpy as np
@@ -10,6 +11,7 @@ from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 from tensorflow.keras.preprocessing.text import Tokenizer
+from nltk.tokenize import TreebankWordTokenizer, TreebankWordDetokenizer
 
 from datasets.base import BaseNewsDataset
 from utils.cache_manager import CacheManager
@@ -28,19 +30,17 @@ class MINDDataset(BaseNewsDataset):
         self,
         name: str,
         version: str,
-        root_dir: str,
         urls: Dict,
         max_title_length: int,
         max_abstract_length: int,
         max_history_length: int,
         max_impressions_length: int,
-        min_word_freq: int,
-        max_vocabulary_size: int,
         random_seed: int,
         embedding_type: str = "glove",
         embedding_size: int = 300,
         sampling: DictConfig = None,
-        data_fraction: float = 0.005,
+        data_fraction: float = 0.001,
+        mode: str = "train",
     ):
         super().__init__()  # Initialize base class with no arguments
         self.name = name
@@ -52,13 +52,12 @@ class MINDDataset(BaseNewsDataset):
         self.max_abstract_length = max_abstract_length
         self.max_history_length = max_history_length
         self.max_impressions_length = max_impressions_length
-        self.min_word_freq = min_word_freq
-        self.max_vocabulary_size = max_vocabulary_size
         self.embedding_type = embedding_type
         self.embedding_size = embedding_size
         self.embeddings_manager = EmbeddingsManager(self.cache_manager)
         self.sampler = ImpressionSampler(sampling) if sampling else None
         self.data_fraction = data_fraction
+        self.mode = mode
 
         logger.info(f"Initializing MIND dataset ({version} version)")
         logger.info(f"Data will be stored in: {self.dataset_path}")
@@ -66,52 +65,141 @@ class MINDDataset(BaseNewsDataset):
         # Create directories if they don't exist
         self.dataset_path.mkdir(parents=True, exist_ok=True)
 
+        # Datasets
+        self.train_val_news_data: Dict[str, np.ndarray] = {}
+        self.train_behaviors_data: Dict[str, np.ndarray] = {}
+        self.val_behaviors_data: Dict[str, np.ndarray] = {}
+        self.test_news_data: Dict[str, np.ndarray] = {}
+        self.test_behaviors_data: Dict[str, np.ndarray] = {}
+
         # Set random seed
         np.random.seed(random_seed)
 
         # Load and process data
-        self._load_data()
+        self._load_data(mode)
 
-    def _load_data(self) -> None:
-        """Load and process all data."""
-        # Check if processed data exists
-        processed_data_path = self.dataset_path / "processed_data.pkl"
-        if processed_data_path.exists():
-            logger.info("Loading processed data from disk...")
-            with open(processed_data_path, "rb") as f:
-                self.news_data, self.behaviors_data, self.val_behaviors_data = pickle.load(f)
-            logger.info("Processed data loaded successfully.")
+    @property
+    def n_train_behaviors(self) -> int:
+        """Number of training behaviors"""
+        return (
+            len(self.train_behaviors_data["labels"]) if hasattr(self, "train_behaviors_data") else 0
+        )
 
-            # Apply data fraction to reduce dataset size for testing
-            if self.data_fraction < 1.0:
-                self._apply_data_fraction()
+    @property
+    def n_val_behaviors(self) -> int:
+        """Number of validation behaviors"""
+        return len(self.val_behaviors_data["labels"]) if hasattr(self, "val_behaviors_data") else 0
 
-            return
+    @property
+    def n_test_behaviors(self) -> int:
+        """Number of test behaviors"""
+        return (
+            len(self.test_behaviors_data["labels"]) if hasattr(self, "test_behaviors_data") else 0
+        )
 
-        # Download dataset if needed
-        self.download_dataset()
+    def _load_data(self, mode: str = "train") -> None:
+        """Load data based on mode.
 
-        # Build vocabulary from training data
-        self.tokenizer = self.build_vocabulary()
+        Args:
+            mode: Either 'train' for training/validation data or 'test' for test data
+        """
+        preprocessed_path = self.dataset_path / "preprocessed"
+        files_exist = (
+            (preprocessed_path / "preprocess_news_train_val.pkl").exists()
+            and (preprocessed_path / "preprocess_train_val.pkl").exists()
+            and (preprocessed_path / "preprocess_news_test.pkl").exists()
+            and (preprocessed_path / "preprocess_test.pkl").exists()
+        )
 
-        # Load embeddings
-        if self.embedding_type == "glove":
-            self.embeddings = self.embeddings_manager.load_glove()
-        elif self.embedding_type == "bert":
-            self.bert_model, self.bert_tokenizer = self.embeddings_manager.load_bert()
+        # Load embeddings only if preprocessed files do not exist
+        if not files_exist:
+            if self.embedding_type == "glove":
+                self.embeddings = self.embeddings_manager.load_glove()
+                logger.info("GloVe embeddings loaded successfully")
+            elif self.embedding_type == "bert":
+                self.bert_model, self.bert_tokenizer = self.embeddings_manager.load_bert()
+                logger.info("BERT model loaded successfully")
 
-        # Load train and validation data
-        (self.news_data, self.behaviors_data), (_, self.val_behaviors_data) = self.get_train_val_data()
+        if not files_exist:
+            self._preprocess_data()
 
-        # Apply data fraction to reduce dataset size for testing
+        if mode == "train":
+            # Load train/val data
+            try:
+                with open(preprocessed_path / "preprocess_news_train_val.pkl", "rb") as f:
+                    self.train_val_news_data = pickle.load(f)
+                with open(preprocessed_path / "preprocess_train_val.pkl", "rb") as f:
+                    behaviors = pickle.load(f)
+                    self.train_behaviors_data = behaviors["train"]
+                    self.val_behaviors_data = behaviors["val"]
+                logger.info("Loaded preprocessed train/val data")
+            except (FileNotFoundError, pickle.UnpicklingError) as e:
+                raise RuntimeError("Error loading preprocessed data.") from e
+
+        elif mode == "test":
+            # Load only test data
+            files_exist = (preprocessed_path / "preprocess_news_test.pkl").exists() and (
+                preprocessed_path / "preprocess_test.pkl"
+            ).exists()
+
+            if not files_exist:
+                self._preprocess_data(mode="test")
+
+            # Load test data
+            try:
+                with open(preprocessed_path / "preprocess_news_test.pkl", "rb") as f:
+                    self.test_news_data = pickle.load(f)
+                with open(preprocessed_path / "preprocess_test.pkl", "rb") as f:
+                    behaviors = pickle.load(f)
+                    self.test_behaviors_data = behaviors["test"]
+                logger.info("Loaded preprocessed test data")
+            except (FileNotFoundError, pickle.UnpicklingError) as e:
+                raise RuntimeError("Error loading preprocessed test data.") from e
+
         if self.data_fraction < 1.0:
-            self._apply_data_fraction()
+            self._apply_data_fraction(mode)
 
-        # Save processed data
-        logger.info("Saving processed data to disk...")
-        with open(processed_data_path, "wb") as f:
-            pickle.dump((self.news_data, self.behaviors_data, self.val_behaviors_data), f)
-        logger.info("Processed data saved successfully.")
+        self._display_statistics(mode)
+
+    def _preprocess_data(self, mode: str = "train") -> None:
+        preprocessed_path = self.dataset_path / "preprocessed"
+        # Create preprocessed directory
+        os.makedirs(preprocessed_path, exist_ok=True)
+
+        # ----- Process train and validation data
+        logger.info("Processing train and validation data...")
+        self.train_val_news_data, self.train_behaviors_data, self.val_behaviors_data = (
+            self.get_train_val_data()
+        )
+        # Save train/val data
+        logger.info("Saving train/val data...")
+        with open(preprocessed_path / "preprocess_news_train_val.pkl", "wb") as f:
+            pickle.dump(self.train_val_news_data, f)
+        with open(preprocessed_path / "preprocess_train_val.pkl", "wb") as f:
+            pickle.dump({"train": self.train_behaviors_data, "val": self.val_behaviors_data}, f)
+
+        # Clear memory
+        del self.train_val_news_data
+        del self.train_behaviors_data
+        del self.val_behaviors_data
+
+        # ----- Process testing data
+        logger.info("Processing test data...")
+        self.test_news_data, self.test_behaviors_data = self.get_test_data()
+
+        # Save test data
+        logger.info("Saving test data...")
+        with open(preprocessed_path / "preprocess_news_test.pkl", "wb") as f:
+            pickle.dump(self.test_news_data, f)
+        with open(preprocessed_path / "preprocess_test.pkl", "wb") as f:
+            pickle.dump({"test": self.test_behaviors_data}, f)
+
+        # Clear memory
+        del self.test_news_data
+        del self.test_behaviors_data
+
+        # Preprocessing complete
+        logger.info("Preprocessing complete!")
 
     def download_dataset(self) -> None:
         """Download and extract MIND dataset if not already present"""
@@ -173,153 +261,120 @@ class MINDDataset(BaseNewsDataset):
             },
         )
 
-    def build_vocabulary(self) -> Tokenizer:
-        """Build vocabulary from training data"""
-        logger.info("Building vocabulary from training data...")
-
-        # Create tokenizer
-        tokenizer = Tokenizer(
-            num_words=self.max_vocabulary_size,
-            oov_token="<UNK>",
-            filters='!"#$%&()*+,-./:;<=>?@[\\]^_`{|}~\t\n',
-        )
-
-        # Read news data from both "train" and "valid" directories
-        train_news_df = pd.read_csv(
-            self.dataset_path / "train" / "news.tsv",
-            sep="\t",
-            header=None,
-            names=[
-                "id",
-                "category",
-                "subcategory",
-                "title",
-                "abstract",
-                "url",
-                "title_entities",
-                "abstract_entities",
-            ],
-        )
-
-        valid_news_df = pd.read_csv(
-            self.dataset_path / "valid" / "news.tsv",
-            sep="\t",
-            header=None,
-            names=[
-                "id",
-                "category",
-                "subcategory",
-                "title",
-                "abstract",
-                "url",
-                "title_entities",
-                "abstract_entities",
-            ],
-        )
-
-        # Concatenate the news data from both directories
-        news_df = pd.concat([train_news_df, valid_news_df], ignore_index=True)
-
-        # Combine title and abstract text
-        texts = []
-        with Progress() as progress:
-            task = progress.add_task("Processing texts...", total=len(news_df))
-            for _, row in news_df.iterrows():
-                title = row["title"] if pd.notna(row["title"]) else ""
-                abstract = row["abstract"] if pd.notna(row["abstract"]) else ""
-                texts.append(f"{title} {abstract}")
-                progress.advance(task)
-
-        # Fit tokenizer
-        tokenizer.fit_on_texts(texts)
-
-        return tokenizer
-
-    def process_news(self, news_df: pd.DataFrame) -> Dict[str, np.ndarray]:
+    def process_news(
+        self, news_df: pd.DataFrame, split: str = "train_val"
+    ) -> Dict[str, np.ndarray]:
         """Process news articles into numerical format"""
-        with console.status("[bold green]Processing news articles..."):
-            if self.embedding_type == "glove":
-                # Process with GloVe
-                title_embeddings = self._get_glove_embeddings(news_df["title"])
-                abstract_embeddings = self._get_glove_embeddings(news_df["abstract"])
-            else:
-                # Process with BERT
-                title_embeddings = self.embeddings_manager.get_bert_embeddings(
-                    news_df["title"].tolist(), max_length=self.max_title_length
-                )
-                abstract_embeddings = self.embeddings_manager.get_bert_embeddings(
-                    news_df["abstract"].tolist(), max_length=self.max_abstract_length
-                )
+        # Check if processed news exists
+        preprocessed_path = self.dataset_path / "preprocessed"
+        news_cache_path = preprocessed_path / f"processed_news_{split}.pkl"
 
-        return {
-            "news_ids": news_df["id"].values,
-            "title": title_embeddings,
-            "abstract": abstract_embeddings,
-        }
+        if news_cache_path.exists():
+            try:
+                logger.info(f"Loading processed {split} news from cache...")
+                with open(news_cache_path, "rb") as f:
+                    processed_news = pickle.load(f)
+                logger.info(
+                    f"Loaded {len(processed_news['news_ids'])} processed news articles from cache"
+                )
+                return processed_news
+            except (pickle.UnpicklingError, EOFError) as e:
+                logger.warning(f"Corrupted news cache detected: {e}")
+                news_cache_path.unlink(missing_ok=True)
+
+        # Process news if cache doesn't exist or was corrupted
+        processed_news = self._process_news_data(news_df)
+
+        # Save processed news to cache
+        logger.info(f"Saving {split} news to cache...")
+        with open(news_cache_path, "wb") as f:
+            pickle.dump(processed_news, f)
+        logger.info(f"Saved {len(processed_news['news_ids'])} news articles to cache")
+
+        return processed_news
+
+    def _process_news_data(self, news_df: pd.DataFrame) -> Dict[str, np.ndarray]:
+        """Process news articles into numerical format"""
+        if self.embedding_type == "glove":
+            # Process with GloVe and store multiple representations
+            processed_title_data, title_vocab = self.process_and_tokenize_texts(
+                self.max_title_length, news_df, "title"
+            )
+            processed_abstract_data, abstract_vocab = self.process_and_tokenize_texts(
+                self.max_abstract_length, news_df, "abstract"
+            )
+
+            processed_news = {
+                "news_ids": news_df["id"].values,
+                "title": processed_title_data["embeddings"],
+                "title_raw": processed_title_data["raw_text"],
+                "title_tokens": processed_title_data["token_ids"],
+                "abstract": processed_abstract_data["embeddings"],
+                "abstract_raw": processed_abstract_data["raw_text"],
+                "abstract_tokens": processed_abstract_data["token_ids"],
+                "title_vocab": title_vocab,
+                "abstract_vocab": abstract_vocab,
+            }
+
+            return processed_news
+        else:
+            # Process with BERT
+            title_embeddings = self.embeddings_manager.get_bert_embeddings(
+                news_df["title"].tolist(), max_length=self.max_title_length
+            )
+            abstract_embeddings = self.embeddings_manager.get_bert_embeddings(
+                news_df["abstract"].tolist(), max_length=self.max_abstract_length
+            )
+
+            return {
+                "news_ids": news_df["id"].values,
+                "title": title_embeddings,
+                "abstract": abstract_embeddings,
+            }
 
     def _get_glove_embeddings(self, texts: pd.Series) -> np.ndarray:
-        """Convert texts to GloVe embeddings"""
+        """Convert texts to GloVe embeddings with better tokenization and detokenization"""
+        tokenizer = TreebankWordTokenizer()
+        detokenizer = TreebankWordDetokenizer()
         embeddings = []
+
         for text in texts:
             if pd.isna(text):
-                # Handle NaN by appending a zero vector of the appropriate length
                 embeddings.append([np.zeros(self.embedding_size)] * self.max_title_length)
                 continue
 
             try:
-                words = text.lower().split()
+                # Use TreebankWordTokenizer for better tokenization
+                word_tokens = tokenizer.tokenize(text.lower())[: self.max_title_length]
+
+                # Store the detokenized version for potential later use
+                detokenized_text = detokenizer.detokenize(word_tokens)
+
+                # Get embeddings for each token
                 word_embeddings = [
-                    self.embeddings.get(word, np.zeros(self.embedding_size)) for word in words[: self.max_title_length]
+                    self.embeddings.get(word, np.zeros(self.embedding_size)) for word in word_tokens
                 ]
+
                 # Pad if necessary
                 if len(word_embeddings) < self.max_title_length:
-                    word_embeddings.extend([np.zeros(self.embedding_size)] * (self.max_title_length - len(word_embeddings)))
+                    word_embeddings.extend(
+                        [np.zeros(self.embedding_size)]
+                        * (self.max_title_length - len(word_embeddings))
+                    )
+
                 embeddings.append(word_embeddings)
+
             except Exception as e:
-                raise Exception(f"Error processing text: {text} | Error: {e}")
+                logger.error(f"Error processing text: {text}")
+                logger.error(f"Error details: {str(e)}")
+                raise e
+
         return np.array(embeddings)
 
     def process_behaviors(
         self, behaviors_df: pd.DataFrame, news_dict: Dict[str, int], stage: str
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Process user behaviors into numerical format suitable for model input.
-
-        This method processes a DataFrame containing user behavior data, specifically
-        the history of news articles a user has interacted with and the impressions
-        (news articles shown to the user along with their click status). The method
-        converts these into fixed-size numerical arrays that can be used as input
-        for machine learning models.
-
-        Parameters:
-        ----------
-        behaviors_df : pd.DataFrame
-            A DataFrame containing user behavior data. It must include the columns:
-            - 'history': A string of space-separated news IDs representing the user's
-              interaction history.
-            - 'impressions': A string of space-separated pairs in the format 'newsID-clickStatus',
-              where 'clickStatus' is '1' if the article was clicked and '0' otherwise.
-
-        news_dict : Dict[str, int]
-            A dictionary mapping news IDs to numerical indices. This is used to convert
-            news IDs into indices that can be used as input for models.
-
-        stage : str
-            A string indicating whether the method is being called for training or validation data.
-
-        Returns:
-        -------
-        Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
-            A tuple containing four numpy arrays:
-            - histories: A 2D numpy array where each row represents a user's interaction
-              history, converted into indices and padded to a fixed length.
-            - impression_ids: A 2D numpy array where each row contains the indices of
-              news articles in the impression list, padded to a fixed length.
-            - labels: A 2D numpy array where each row contains the click status for each
-              impression shown to the user, represented as binary values (1 for clicked,
-              0 for not clicked), padded to a fixed length.
-            - masks: A 2D numpy array where each row contains binary values indicating
-              which positions in the impression list are valid (1) and which are padded (0).
-        """
+    ) -> Dict[str, np.ndarray]:
+        """Process user behaviors using ImpressionSampler for sampling."""
         logger.info(f"Processing user behaviors for {stage} data...")
 
         histories = []
@@ -342,76 +397,53 @@ class MINDDataset(BaseNewsDataset):
                 history = row["history"].split() if pd.notna(row["history"]) else []
                 history_indices = [news_dict.get(h, 0) for h in history]
                 history_indices = history_indices[-self.max_history_length :]
-                history_indices = [0] * (self.max_history_length - len(history_indices)) + history_indices
+                history_indices = [0] * (
+                    self.max_history_length - len(history_indices)
+                ) + history_indices
 
-                # Process impressions
+                # Process impressions using ImpressionSampler
                 impressions = row["impressions"].split()
                 if self.sampler:
                     impression_groups = self.sampler.sample_impressions(impressions)
-                    # Process all impression groups at once
-                    imp_ids_all = []
-                    click_status_all = []
-                    masks_all = []
-
-                    for group in impression_groups:
-                        imp_ids = []
-                        click_status = []
-                        for imp in group:
-                            news_id, label = imp.split("-")
-                            imp_ids.append(news_dict.get(news_id, 0))
-                            click_status.append(int(label))
-
-                        imp_ids_all.append(imp_ids)
-                        click_status_all.append(click_status)
-                        masks_all.append([1] * len(group))
-
-                    # Add the history once for all groups
-                    histories.extend([history_indices] * len(impression_groups))
-                    impression_ids.extend(imp_ids_all)
-                    labels.extend(click_status_all)
-                    masks.extend(masks_all)
                 else:
-                    # Original processing for no sampling
+                    # If no sampler, use all impressions as one group
+                    impression_groups = [impressions[: self.max_impressions_length]]
+
+                # Process all impression groups
+                for group in impression_groups:
                     imp_ids = []
                     click_status = []
-                    for imp in impressions:
+                    for imp in group:
                         news_id, label = imp.split("-")
                         imp_ids.append(news_dict.get(news_id, 0))
                         click_status.append(int(label))
 
-                    # Pad if necessary
-                    mask = [1] * len(imp_ids)
-                    if len(imp_ids) < self.max_impressions_length:
-                        imp_ids += [0] * (self.max_impressions_length - len(imp_ids))
-                        click_status += [0] * (self.max_impressions_length - len(click_status))
-                        mask += [0] * (self.max_impressions_length - len(mask))
-                    else:
-                        imp_ids = imp_ids[: self.max_impressions_length]
-                        click_status = click_status[: self.max_impressions_length]
-                        mask = mask[: self.max_impressions_length]
+                    # Add padding if necessary
+                    pad_length = self.max_impressions_length - len(imp_ids)
+                    if pad_length > 0:
+                        imp_ids.extend([0] * pad_length)
+                        click_status.extend([0] * pad_length)
 
                     histories.append(history_indices)
                     impression_ids.append(imp_ids)
                     labels.append(click_status)
-                    masks.append(mask)
+                    masks.append([1] * len(group) + [0] * pad_length)
 
                 progress.advance(task)
 
-        logger.info(f"Processed {len(behaviors_df):,} user behaviors for {stage} data")
-        histories_arr = np.array(histories)
-        logger.info(f"Histories shape: {histories_arr.shape}")
-        impression_ids_arr = np.array(impression_ids)
-        logger.info(f"Impression IDs shape: {impression_ids_arr.shape}")
-        labels_arr = np.array(labels)
-        logger.info(f"Labels shape: {labels_arr.shape}")
-        masks_arr = np.array(masks)
-        logger.info(f"Masks shape: {masks_arr.shape}")
-
-        return histories_arr, impression_ids_arr, labels_arr, masks_arr
+        return {
+            "histories": np.array(histories),
+            "impressions": np.array(impression_ids),
+            "labels": np.array(labels),
+            "masks": np.array(masks),
+        }
 
     def get_train_val_data(
         self,
-    ) -> Tuple[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]], Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]]:
+    ) -> Tuple[
+        Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
+        Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
+    ]:
         """Load and process training data"""
         # Process news data
         news_df = pd.read_csv(
@@ -429,7 +461,8 @@ class MINDDataset(BaseNewsDataset):
                 "abstract_entities",
             ],
         )
-        self.news_data = self.process_news(news_df)  # Store all news features
+        logger.info(f"News data shape: {news_df.shape}")
+        train_val_news_data = self.process_news(news_df, "train_val")  # Store all news features
 
         # Process behaviors
         behaviors_df = pd.read_csv(
@@ -450,36 +483,20 @@ class MINDDataset(BaseNewsDataset):
         logger.info(f"Validation behaviors: {len(val_behaviors):,}")
 
         # Process train behaviors
-        train_histories, train_impressions, train_labels, train_masks = self.process_behaviors(
+        train_behaviors_data = self.process_behaviors(
             train_behaviors,
-            {nid: idx for idx, nid in enumerate(self.news_data["news_ids"])},
+            {nid: idx for idx, nid in enumerate(train_val_news_data["news_ids"])},
             stage="train",
         )
 
-        # Store train behaviors data
-        self.behaviors_data = {
-            "histories": train_histories,
-            "impressions": train_impressions,
-            "labels": train_labels,
-            "masks": train_masks,
-        }
-
         # Process validation behaviors
-        val_histories, val_impressions, val_labels, val_masks = self.process_behaviors(
+        val_behaviors_data = self.process_behaviors(
             val_behaviors,
-            {nid: idx for idx, nid in enumerate(self.news_data["news_ids"])},
+            {nid: idx for idx, nid in enumerate(train_val_news_data["news_ids"])},
             stage="validation",
         )
 
-        # Store validation behaviors data
-        self.val_behaviors_data = {
-            "histories": val_histories,
-            "impressions": val_impressions,
-            "labels": val_labels,
-            "masks": val_masks,
-        }
-
-        return (self.news_data, self.behaviors_data), (self.news_data, self.val_behaviors_data)
+        return train_val_news_data, train_behaviors_data, val_behaviors_data
 
     def get_test_data(self) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
         """Load and process test data"""
@@ -500,7 +517,7 @@ class MINDDataset(BaseNewsDataset):
                 "abstract_entities",
             ],
         )
-        self.test_news_data = self.process_news(news_df)
+        test_news_data = self.process_news(news_df, "test")
 
         behaviors_df = pd.read_csv(
             test_dir / "behaviors.tsv",
@@ -509,30 +526,23 @@ class MINDDataset(BaseNewsDataset):
             names=["impression_id", "user_id", "time", "history", "impressions"],
         )
 
-        test_histories, test_impressions, test_labels, test_masks = self.process_behaviors(
+        # Process test behaviors
+        test_behaviors_data = self.process_behaviors(
             behaviors_df,
-            {nid: idx for idx, nid in enumerate(self.test_news_data["news_ids"])},
+            {nid: idx for idx, nid in enumerate(test_news_data["news_ids"])},
             stage="test",
         )
 
-        # Store test behaviors data
-        self.test_behaviors_data = {
-            "histories": test_histories,
-            "impressions": test_impressions,
-            "labels": test_labels,
-            "masks": test_masks,
-        }
-        self.n_test_behaviors = len(behaviors_df)
-
-        return self.test_news_data, self.test_behaviors_data
+        return test_news_data, test_behaviors_data
 
     def train_dataloader(self, batch_size: int) -> Iterator[Tuple]:
         """Create batches of training data."""
         return self._create_dataloader(
-            self.behaviors_data["histories"],
-            self.behaviors_data["impressions"],
-            self.behaviors_data["labels"],
-            self.behaviors_data["masks"],
+            self.train_val_news_data,
+            self.train_behaviors_data["histories"],
+            self.train_behaviors_data["impressions"],
+            self.train_behaviors_data["labels"],
+            self.train_behaviors_data["masks"],
             batch_size,
             shuffle=True,
         )
@@ -540,6 +550,7 @@ class MINDDataset(BaseNewsDataset):
     def val_dataloader(self, batch_size: int) -> Iterator[Tuple]:
         """Create batches of validation data."""
         return self._create_dataloader(
+            self.train_val_news_data,
             self.val_behaviors_data["histories"],
             self.val_behaviors_data["impressions"],
             self.val_behaviors_data["labels"],
@@ -548,8 +559,21 @@ class MINDDataset(BaseNewsDataset):
             shuffle=False,
         )
 
+    def test_dataloader(self, batch_size: int) -> Iterator[Tuple]:
+        """Create batches of test data."""
+        return self._create_dataloader(
+            self.test_news_data,
+            self.test_behaviors_data["histories"],
+            self.test_behaviors_data["impressions"],
+            self.test_behaviors_data["labels"],
+            self.test_behaviors_data["masks"],
+            batch_size,
+            shuffle=False,
+        )
+
     def _create_dataloader(
         self,
+        news_data: Dict[str, np.ndarray],
         histories: np.ndarray,  # [n_behaviors, max_history_len]
         impressions: np.ndarray,  # [n_behaviors, max_impressions_len]
         labels: np.ndarray,  # [n_behaviors, max_impressions_len]
@@ -590,9 +614,11 @@ class MINDDataset(BaseNewsDataset):
                 "title": np.stack(
                     [
                         [
-                            self.news_data["title"][news_id]
-                            if news_id != 0
-                            else np.zeros_like(self.news_data["title"][0])  # Zero embedding for padding
+                            (
+                                news_data["title"][news_id]
+                                if news_id != 0
+                                else np.zeros_like(news_data["title"][0])
+                            )  # Zero embedding for padding
                             for news_id in user_history
                         ]
                         for user_history in history_batch
@@ -605,9 +631,11 @@ class MINDDataset(BaseNewsDataset):
                 "title": np.stack(
                     [
                         [
-                            self.news_data["title"][news_id]
-                            if news_id != 0
-                            else np.zeros_like(self.news_data["title"][0])  # Zero embedding for padding
+                            (
+                                news_data["title"][news_id]
+                                if news_id != 0
+                                else np.zeros_like(news_data["title"][0])
+                            )  # Zero embedding for padding
                             for news_id in user_impressions
                         ]
                         for user_impressions in impressions_batch
@@ -617,7 +645,7 @@ class MINDDataset(BaseNewsDataset):
 
             yield (impression_news, history_news), impression_labels, impression_masks
 
-    def _apply_data_fraction(self) -> None:
+    def _apply_data_fraction(self, mode: str = "train") -> None:
         """Reduce the dataset size based on the data_fraction parameter."""
         logger.info(f"Using {self.data_fraction * 100:.0f}% of the dataset for testing purposes.")
 
@@ -625,16 +653,120 @@ class MINDDataset(BaseNewsDataset):
             """Select data"""
             for key in data_dict:
                 data_dict[key] = data_dict[key][: int(len(data_dict[key]) * self.data_fraction)]
+    
+        if mode == "train":
+            reduce_data(self.train_behaviors_data)
+            reduce_data(self.val_behaviors_data)
+        else:
+            reduce_data(self.test_behaviors_data)
 
-        reduce_data(self.behaviors_data)
-        reduce_data(self.val_behaviors_data)
+    def _display_statistics(self, mode: str = "train") -> None:
+        """Display statistics about the dataset."""
+        logger.info("Displaying dataset statistics...")
 
-    @property
-    def n_val_behaviors(self) -> int:
-        """Number of validation behaviors"""
-        return len(self.val_behaviors_data["labels"]) if hasattr(self, "val_behaviors_data") else 0
+        if mode == "train":
+            num_train_val_news = len(self.train_val_news_data["news_ids"])
+            num_train_behaviors = len(self.train_behaviors_data["histories"])
+            num_val_behaviors = len(self.val_behaviors_data["histories"])
 
-    @property
-    def n_behaviors(self) -> int:
-        """Number of training behaviors"""
-        return len(self.behaviors_data["labels"]) if hasattr(self, "behaviors_data") else 0
+            logger.info(f"Number of news articles: {num_train_val_news}")
+            logger.info(f"Number of training behaviors: {num_train_behaviors}")
+            logger.info(f"Number of validation behaviors: {num_val_behaviors}")
+
+            # Additional statistics
+            avg_history_length = np.mean([len(h) for h in self.train_behaviors_data["histories"]])
+            avg_impressions_length = np.mean(
+                [len(i) for i in self.train_behaviors_data["impressions"]]
+            )
+            avg_history_length_val = np.mean([len(h) for h in self.val_behaviors_data["histories"]])
+            avg_impressions_length_val = np.mean(
+                [len(i) for i in self.val_behaviors_data["impressions"]]
+            )
+
+            logger.info(f"Average history length: {avg_history_length:.2f}")
+            logger.info(f"Average impressions length: {avg_impressions_length:.2f}")
+            logger.info(f"Average history length (validation): {avg_history_length_val:.2f}")
+            logger.info(
+                f"Average impressions length (validation): {avg_impressions_length_val:.2f}"
+            )
+        else:
+            num_test_news = len(self.test_news_data["news_ids"])
+            num_test_behaviors = len(self.test_behaviors_data["histories"])
+
+            logger.info(f"Number of news articles: {num_test_news}")
+            logger.info(f"Number of test behaviors: {num_test_behaviors}")
+
+            # Additional statistics
+            avg_history_length_test = np.mean(
+                [len(h) for h in self.test_behaviors_data["histories"]]
+            )
+            avg_impressions_length_test = np.mean(
+                [len(i) for i in self.test_behaviors_data["impressions"]]
+            )
+
+            logger.info(f"Average history length (test): {avg_history_length_test:.2f}")
+            logger.info(f"Average impressions length (test): {avg_impressions_length_test:.2f}")
+
+    def process_and_tokenize_texts(
+        self, title_len: int, news_df: pd.DataFrame, column_name: str
+    ) -> Tuple[Dict[str, np.ndarray], Dict[str, int]]:
+        """Process and tokenize texts while building vocabulary and storing both raw and embedded forms."""
+        vocab = {"[PAD]": 0, "[UNK]": 1}
+        tokenizer = TreebankWordTokenizer()
+        detokenizer = TreebankWordDetokenizer()
+
+        processed_data = {
+            "news_ids": news_df["id"].values,
+            "raw_text": [],
+            "token_ids": [],
+            "embeddings": [],
+        }
+
+        # Use logger instead of print
+        logger.info(f"Processing {column_name} for {len(news_df)} articles")
+
+        # Process without Progress bar
+        for title in news_df[column_name]:
+            if pd.isna(title):
+                processed_data["raw_text"].append("")
+                processed_data["token_ids"].append([0] * title_len)
+                processed_data["embeddings"].append([np.zeros(self.embedding_size)] * title_len)
+                continue
+
+            # Tokenize and truncate
+            word_tokens = tokenizer.tokenize(title.lower())[:title_len]
+
+            # Store detokenized form
+            detokenized_text = detokenizer.detokenize(word_tokens)
+            processed_data["raw_text"].append(detokenized_text)
+
+            # Process tokens and build vocabulary
+            token_ids = []
+            embeddings = []
+
+            for word in word_tokens:
+                if word not in vocab:
+                    vocab[word] = len(vocab)
+                token_ids.append(vocab[word])
+
+                # Get GloVe embedding
+                embedding = self.embeddings.get(word, np.zeros(self.embedding_size))
+                embeddings.append(embedding)
+
+            # Pad sequences
+            pad_length = title_len - len(word_tokens)
+            if pad_length > 0:
+                token_ids.extend([0] * pad_length)
+                embeddings.extend([np.zeros(self.embedding_size)] * pad_length)
+
+            processed_data["token_ids"].append(token_ids)
+            processed_data["embeddings"].append(embeddings)
+
+        # Convert to numpy arrays
+        processed_data["token_ids"] = np.array(processed_data["token_ids"])
+        processed_data["embeddings"] = np.array(processed_data["embeddings"])
+
+        logger.info(f"Processed {len(processed_data['embeddings'])} {column_name} entries")
+        logger.info(f"Vocabulary size: {len(vocab)}")
+
+        return processed_data, vocab

@@ -48,7 +48,7 @@ class CacheManager:
 
     def get_embedding_path(self, embedding_name: str, dim: int) -> Path:
         """Get path for embedding cache"""
-        return self.embeddings_dir / embedding_name / f"{embedding_name}_{dim}d"
+        return self.embeddings_dir / f"{embedding_name}_{dim}d"
 
     def is_dataset_cached(self, dataset_name: str, version: str) -> bool:
         """Check if dataset is cached"""
