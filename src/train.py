@@ -3,13 +3,11 @@ import os
 # Set TensorFlow logging level
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-import logging
 import json
 import datetime
-from collections import defaultdict
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, Tuple
+from typing import Any, Dict, Tuple
 
 import hydra
 import tensorflow as tf
@@ -206,10 +204,12 @@ def train(cfg: DictConfig) -> None:
         mixed_precision=cfg.device.mixed_precision,
     )
 
-    # Create model directory if it doesn't exist
+    # Create model directory with timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     model_dir = Path(cfg.train.model_dir)
-    model_dir.mkdir(parents=True, exist_ok=True)
-    console.log(f"Model checkpoints will be saved to: {model_dir}")
+    run_dir = model_dir / f"run_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    console.log(f"Model checkpoints will be saved to: {run_dir}")
 
     # Set random seeds
     tf.random.set_seed(cfg.seed)
@@ -247,7 +247,19 @@ def train(cfg: DictConfig) -> None:
     # Training loop
     patience_counter = 0
 
-    best_checkpoint_time = None
+    best_model_path = run_dir / "best_epoch.weights.h5"
+    last_model_path = run_dir / "last_epoch.weights.h5"
+
+    # Initialize wandb metrics history
+    wandb_history = {
+        "epoch": [],
+        "train/loss": [],
+        "val/loss": [],
+        "val/auc": [],
+        "val/mrr": [],
+        "val/ndcg@5": [],
+        "val/ndcg@10": []
+    }
 
     with Progress(
         SpinnerColumn(),
@@ -316,7 +328,14 @@ def train(cfg: DictConfig) -> None:
                 }
                 wandb.log(wandb_metrics)
 
-            # Update best metrics if loss improved
+                # Store metrics history
+                for k, v in wandb_metrics.items():
+                    wandb_history[k].append(float(v))
+
+            # Save last model after each epoch
+            model.save_weights(last_model_path)
+
+            # Update best model if loss improved
             if epoch_metrics["train/loss"] < best_metrics["loss"]:
                 best_metrics = {
                     "epoch": epoch,
@@ -325,16 +344,13 @@ def train(cfg: DictConfig) -> None:
                 }
                 patience_counter = 0
 
-                best_checkpoint_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-
                 # Save best model
-                model_path = (
-                    model_dir / f"{cfg.model._target_}_best_{best_checkpoint_time}.weights.h5"
-                )
-                model.save_weights(model_path)
+                model.save_weights(best_model_path)
                 console.log(
                     f"Saved best model at epoch {epoch} with loss: {epoch_metrics['train/loss']:.4f}"
                 )
+            else:
+                patience_counter += 1
 
             # Log to console (always do this)
             console.log(f"[bold cyan]Epoch {epoch}")
@@ -351,70 +367,62 @@ def train(cfg: DictConfig) -> None:
             progress.update(epoch_progress, advance=1)
 
         # Testing phase
-        if best_checkpoint_time:
-            # Load best model
-            best_model_path = (
-                model_dir / f"{cfg.model._target_}_best_{best_checkpoint_time}.weights.h5"
+        if best_model_path.exists():
+            model.load_weights(best_model_path)
+            console.log(f"Loaded best model from epoch {best_metrics['epoch']}")
+
+            # Load and process test data
+            console.log("\n[bold yellow]Loading test data...")
+            dataset._load_data("test")  # Only process test data when needed
+
+            # Run testing
+            console.log("\n[bold yellow]Starting Testing Phase...")
+            test_metrics = validate(
+                model,
+                dataset.test_dataloader(cfg.train.batch_size),
+                metrics,
+                get_num_batches(dataset.test_size, cfg.train.batch_size),
+                progress,
+                mode="test",
             )
-            if best_model_path.exists():
-                model.load_weights(best_model_path)
-                console.log(f"Loaded best model from epoch {best_metrics['epoch']}")
 
-                # Load and process test data
-                console.log("\n[bold yellow]Loading test data...")
-                dataset._load_data("test")  # Only process test data when needed
-
-                # Run testing
-                console.log("\n[bold yellow]Starting Testing Phase...")
-                test_metrics = validate(
-                    model,
-                    dataset.test_dataloader(cfg.train.batch_size),
-                    metrics,
-                    get_num_batches(dataset.test_size, cfg.train.batch_size),
-                    progress,
-                    mode="test",
+            # Only log to wandb if enabled
+            if cfg.logging.enable_wandb:
+                # Log test metrics
+                wandb.log(
+                    {
+                        "test/final": {
+                            **{f"test/{k}": v for k, v in test_metrics.items()},
+                            "best_epoch": best_metrics["epoch"],
+                        }
+                    }
                 )
 
-                # Only log to wandb if enabled
-                if cfg.logging.enable_wandb:
-                    # Log test metrics
-                    wandb.log(
-                        {
-                            "test/final": {
-                                **{f"test/{k}": v for k, v in test_metrics.items()},
-                                "best_epoch": best_metrics["epoch"],
-                            }
-                        }
-                    )
-
-                    # Log summary of best validation metrics
-                    wandb.run.summary.update(
-                        {
-                            "best_val/epoch": best_metrics["epoch"],
-                            **{f"best_val/{k}": v for k, v in best_metrics.items() if k != "epoch"},
-                        }
-                    )
-
-                # Always log to console
-                console.log("\n[bold yellow]Test Metrics:")
-                for metric_name, value in test_metrics.items():
-                    console.log(f"[bold blue]{metric_name}: {value:.4f}")
-
-                # Save metrics to file
-                metrics_path = model_dir / "metrics.json"
-                metrics_data = {
-                    "best_validation": {k: float(v) for k, v in best_metrics.items()},
-                    "test": {k: float(v) for k, v in test_metrics.items()},
-                }
-                if cfg.logging.enable_wandb:
-                    metrics_data["training_history"] = {
-                        "epochs": wandb_metrics["epoch"],
-                        "metrics": {k: [float(v_i) for v_i in v] for k, v in wandb_metrics.items()}
+                # Log summary of best validation metrics
+                wandb.run.summary.update(
+                    {
+                        "best_val/epoch": best_metrics["epoch"],
+                        **{f"best_val/{k}": v for k, v in best_metrics.items() if k != "epoch"},
                     }
+                )
 
-                with open(metrics_path, "w") as f:
-                    json.dump(metrics_data, f, indent=2)
-                console.log(f"Saved metrics to {metrics_path}")
+            # Always log to console
+            console.log("\n[bold yellow]Test Metrics:")
+            for metric_name, value in test_metrics.items():
+                console.log(f"[bold blue]{metric_name}: {value:.4f}")
+
+            # Save metrics to the run directory
+            metrics_path = run_dir / "metrics.json"
+            metrics_data = {
+                "best_validation": {k: float(v) for k, v in best_metrics.items()},
+                "test": {k: float(v) for k, v in test_metrics.items()},
+            }
+            if cfg.logging.enable_wandb:
+                metrics_data["training_history"] = wandb_history
+
+            with open(metrics_path, "w") as f:
+                json.dump(metrics_data, f, indent=2)
+            console.log(f"Saved metrics to {metrics_path}")
 
     # Only finish wandb if it was enabled
     if cfg.logging.enable_wandb:

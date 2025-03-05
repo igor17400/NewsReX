@@ -41,7 +41,7 @@ class MINDDataset(BaseNewsDataset):
         embedding_type: str = "glove",
         embedding_size: int = 300,
         sampling: DictConfig = None,
-        data_fraction: float = 0.1,
+        data_fraction: float = 1.0,
         mode: str = "train",
     ):
         super().__init__()
