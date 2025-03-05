@@ -1,8 +1,11 @@
 from typing import Dict, List, Optional
-
+import logging
 import numpy as np
 import tensorflow as tf
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 
+# Setup logger
+logger = logging.getLogger(__name__)
 
 class NewsRecommenderMetrics:
     """Metrics for evaluating news recommendation models"""
@@ -70,3 +73,54 @@ class NewsRecommenderMetrics:
                 metrics["ndcg@10"].append(NewsRecommenderMetrics.ndcg(imp_true, imp_pred, k=10))
 
         return {k: np.mean(v) if v else 0.0 for k, v in metrics.items()}
+
+    def compute_metrics(self, labels: tf.Tensor, predictions: tf.Tensor, progress=None) -> Dict[str, float]:
+        """Compute all metrics for news recommendation.
+        
+        Args:
+            labels: Ground truth labels [batch_size, num_candidates]
+            predictions: Model predictions [batch_size, num_candidates]
+            progress: Tuple of (progress_bar, task_id) from parent function
+            
+        Returns:
+            Dictionary containing metric values
+        """
+        # Convert tensors to numpy arrays
+        labels_np = labels.numpy()
+        predictions_np = predictions.numpy()
+        
+        
+        # Initialize metric lists
+        aucs = []
+        mrrs = []
+        ndcg5s = []
+        ndcg10s = []
+        
+        # Compute metrics for each sample in the batch
+        for i in range(len(labels_np)):
+            sample_labels = labels_np[i]
+            sample_preds = predictions_np[i]
+            
+            # Calculate metrics for this sample
+            auc = self.auc(sample_labels, sample_preds)
+            mrr = self.mrr(sample_labels, sample_preds)
+            ndcg5 = self.ndcg(sample_labels, sample_preds, k=5)
+            ndcg10 = self.ndcg(sample_labels, sample_preds, k=10)
+            
+            aucs.append(auc)
+            mrrs.append(mrr)
+            ndcg5s.append(ndcg5)
+            ndcg10s.append(ndcg10)
+            
+            # Update progress if provided
+            if progress is not None:
+                progress_bar, task_id = progress
+                progress_bar.update(task_id, advance=1)
+        
+        # Calculate and return final metrics
+        return {
+            "auc": np.mean(aucs),
+            "mrr": np.mean(mrrs),
+            "ndcg@5": np.mean(ndcg5s),
+            "ndcg@10": np.mean(ndcg10s)
+        }

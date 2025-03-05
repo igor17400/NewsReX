@@ -76,8 +76,14 @@ pip install 'tensorflow[and-cuda]'
 To test it out if it worked we recommend executing the following commands:
 
 ```bash
-python3 -c "import tensorflow as tf; print(tf.reduce_sum(tf.random.normal([1000, 1000])))"
-python3 -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+python test_tensorflow_gpu.py
+```
+
+Expected output:
+
+```bash
+✅ If TensorFlow detects a GPU, it will list it.
+❌ If the output is an empty list ([]), TensorFlow is not using a GPU.
 ```
 
 Note: You can also run commands without activating the shell using `poetry run`, for example:

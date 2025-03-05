@@ -28,9 +28,10 @@ logging:
   project_name: "BTC"
   log_every_n_steps: 100
   enable_wandb: false
+  experiment_name: ${model._target_}_${dataset.version}  # This will create names like "src.models.nrms.NRMS_small"
 
-# Experiment tracking
-experiment_name: ${model._target_}_${dataset.dataset.version}
+# Remove or comment out the root level experiment_name since we're using the one in logging
+# experiment_name: None
 
 hydra:
   run:

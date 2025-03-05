@@ -22,14 +22,16 @@ dataset:
 
 # Model specific
 model:
+  embedding_size: 300
   multiheads: 16
-  head_dim: 20
+  head_dim: 64
   attention_hidden_dim: 200
   dropout_rate: 0.2
+  seed: 42
 
 # Training parameters
 train:
-  batch_size: 32
+  batch_size: 64
   num_epochs: 2
   learning_rate: 0.0001
   early_stopping_patience: 5
@@ -38,7 +40,7 @@ train:
 logging:
   enable_wandb: false
   project_name: "BTC"
-  experiment_name: "nrms_mind_${dataset.version}"
+  experiment_name: nrms_mind_small
 
 # Sampling configuration
 sampling:
@@ -49,5 +51,5 @@ sampling:
 
 device:
   gpu_ids: [0]  # Use first GPU
-  memory_limit: 0.9
+  memory_limit: 1
   mixed_precision: true

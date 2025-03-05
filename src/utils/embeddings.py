@@ -17,27 +17,31 @@ class EmbeddingsManager:
     def __init__(self, cache_manager: CacheManager):
         self.cache_manager = cache_manager
         self.glove_embeddings = None
+        self.embedding_matrix = None
+        self.vocab_size = None
+        self.embedding_dim = None
         self.bert_model = None
         self.bert_tokenizer = None
 
-    def load_glove(self, dim: int = 300) -> Dict[str, np.ndarray]:
-        """Load GloVe embeddings from disk or download if not present"""
+    def load_glove(self, dim: int = 300) -> None:
+        """Load GloVe embeddings and create embedding matrix"""
         path = self.cache_manager.get_embedding_path("glove", dim)
         txt_file = path / f"glove.840B.{dim}d.txt"
         npy_file = path / f"glove.840B.{dim}d.npy"
 
-        # If embeddings already loaded, return them
-        if self.glove_embeddings is not None:
-            return self.glove_embeddings
+        # If embeddings already loaded, return early
+        if self.embedding_matrix is not None:
+            return
 
         # Try to load from .npy if it exists
         if npy_file.exists():
             logger.info("Loading GloVe embeddings from .npy file...")
-            embeddings = {}
-            vectors = np.load(npy_file, allow_pickle=True).item()  # Load as dictionary
-            logger.info(f"Loaded {len(vectors):,} word vectors from .npy")
-            self.glove_embeddings = vectors
-            return vectors
+            self.glove_embeddings = np.load(npy_file, allow_pickle=True).item()
+            logger.info(f"Loaded {len(self.glove_embeddings):,} word vectors from .npy")
+
+            # Create embedding matrix
+            self._create_embedding_matrix(dim)
+            return
 
         # Check if txt file exists, if not download
         if not txt_file.exists():
@@ -68,7 +72,7 @@ class EmbeddingsManager:
 
         # Load embeddings from txt file
         logger.info("Loading GloVe embeddings from txt file...")
-        embeddings = {}
+        self.glove_embeddings = {}
         
         with Progress() as progress:
             file_size = txt_file.stat().st_size
@@ -82,35 +86,57 @@ class EmbeddingsManager:
                         word = ''.join(values[:-dim])
                         # Take last 300 elements as the embedding
                         vector = np.asarray(values[-dim:], dtype='float32')
-                        embeddings[word] = vector
+                        self.glove_embeddings[word] = vector
                         progress.advance(task, len(line.encode('utf-8')))
                     except Exception as e:
                         logger.warning(f"Error processing line: {line[:50]}... Error: {str(e)}")
                         continue
 
-        # Save as .npy for faster future loading
+        # Save embeddings for faster future loading
         logger.info("Saving embeddings to .npy format...")
-        np.save(npy_file, embeddings)  # Save the entire dictionary
-        
-        logger.info(f"Loaded {len(embeddings):,} word vectors")
-        self.glove_embeddings = embeddings
-        return embeddings
+        np.save(npy_file, self.glove_embeddings)
 
-    def load_bert(self, model_name: str = "bert-base-uncased") -> Tuple[TFBertModel, BertTokenizer]:
+        # Create embedding matrix
+        self._create_embedding_matrix(dim)
+
+    def _create_embedding_matrix(self, dim: int) -> None:
+        """Create embedding matrix from loaded GloVe embeddings"""
+        self.embedding_dim = dim
+        self.vocab_size = len(self.glove_embeddings)
+        
+        # Create embedding matrix
+        self.embedding_matrix = np.zeros((self.vocab_size + 1, dim))  # +1 for padding
+        for idx, (word, vector) in enumerate(self.glove_embeddings.items(), 1):
+            self.embedding_matrix[idx] = vector
+            
+        # Convert to TensorFlow constant
+        self.embedding_matrix = tf.constant(self.embedding_matrix, dtype=tf.float32)
+
+    def create_filtered_embedding_matrix(self, vocab: Dict[str, int], dim: int = 300) -> np.ndarray:
+        """Create embedding matrix only for words in the provided vocabulary"""
+        logger.info("Creating filtered embedding matrix for vocabulary...")
+        
+        # Initialize matrix with random values for unknown words
+        matrix_size = len(vocab)
+        embedding_matrix = np.random.uniform(-0.25, 0.25, (matrix_size, dim))
+        
+        # Set zero vector for padding token
+        embedding_matrix[0] = np.zeros(dim)
+        
+        # Count how many words we found
+        found_words = 0
+        
+        for word, idx in vocab.items():
+            if word in self.glove_embeddings:
+                embedding_matrix[idx] = self.glove_embeddings[word]
+                found_words += 1
+        
+        logger.info(f"Found embeddings for {found_words}/{len(vocab)} words")
+        return tf.constant(embedding_matrix, dtype=tf.float32)
+
+    def load_bert(self, model_name: str = "bert-base-uncased") -> None:
         """Load BERT model and tokenizer"""
         if self.bert_model is None:
             logger.info(f"Loading BERT model: {model_name}")
             self.bert_tokenizer = BertTokenizer.from_pretrained(model_name)
             self.bert_model = TFBertModel.from_pretrained(model_name)
-        return self.bert_model, self.bert_tokenizer
-
-    def get_bert_embeddings(self, texts: list, max_length: int = 512) -> tf.Tensor:
-        """Get BERT embeddings for texts"""
-        model, tokenizer = self.load_bert()
-
-        # Tokenize texts
-        encoded = tokenizer(texts, padding="max_length", truncation=True, max_length=max_length, return_tensors="tf")
-
-        # Get embeddings
-        outputs = model(encoded)
-        return outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]

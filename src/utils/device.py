@@ -6,7 +6,9 @@ import tensorflow as tf
 logger = logging.getLogger(__name__)
 
 
-def setup_device(gpu_ids: List[int], memory_limit: float = 0.9, mixed_precision: bool = True) -> None:
+def setup_device(
+    gpu_ids: List[int], memory_limit: float = 0.9, mixed_precision: bool = True
+) -> None:
     """Configure TensorFlow device and memory settings.
 
     Args:
@@ -14,6 +16,9 @@ def setup_device(gpu_ids: List[int], memory_limit: float = 0.9, mixed_precision:
         memory_limit: Fraction of GPU memory to allocate (0 to 1)
         mixed_precision: Whether to use mixed precision training
     """
+    # Disable eager execution (can help with some CUDA issues)
+    # tf.compat.v1.disable_eager_execution()
+
     logger.info("🚀 Setting up devices...")
 
     if not gpu_ids:
@@ -32,24 +37,42 @@ def setup_device(gpu_ids: List[int], memory_limit: float = 0.9, mixed_precision:
         visible_gpus = [gpus[i] for i in gpu_ids if i < len(gpus)]
         tf.config.set_visible_devices(visible_gpus, "GPU")
 
-        # Configure memory growth
-        for gpu in visible_gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-            if memory_limit < 1.0:
-                # Set memory limit using virtual device configuration
-                memory_in_mb = int(24 * 1024 * memory_limit)  # Assuming 24GB GPU, adjust if needed
-                tf.config.set_logical_device_configuration(gpu, [tf.config.LogicalDeviceConfiguration(memory_limit=memory_in_mb)])
+        logger.info(f"Found {len(gpus)} GPUs, using {len(visible_gpus)}")
+
+        # Configure memory growth and limits
+        for i, gpu in enumerate(visible_gpus):
+            try:
+                # Enable memory growth
+                tf.config.experimental.set_memory_growth(gpu, True)
+
+                # Set memory limit if requested
+                if memory_limit < 1.0:
+                    memory_in_mb = int(40 * 1024 * memory_limit)  # Assuming 40GB A100
+                    tf.config.set_logical_device_configuration(
+                        gpu, [tf.config.LogicalDeviceConfiguration(memory_limit=memory_in_mb)]
+                    )
+
+                logger.info(f"🎮 GPU {i}: {gpu.name}")
+                logger.info(f"   - Memory limit: {memory_limit*100:.0f}%")
+
+            except RuntimeError as e:
+                logger.error(f"❌ Error configuring GPU {i}: {e}")
+                continue
 
         # Enable mixed precision if requested
         if mixed_precision:
-            tf.keras.mixed_precision.set_global_policy("mixed_float16")
+            policy = tf.keras.mixed_precision.Policy("mixed_float16")
+            tf.keras.mixed_precision.set_global_policy(policy)
             logger.info("🚀 Enabled mixed precision training")
-
-        logger.info(f"🎮 Using GPU(s): {gpu_ids}")
-        for i, gpu in enumerate(visible_gpus):
-            logger.info(f"📊 GPU {i}: {gpu.name}, Memory limit: {memory_limit*100:.0f}%")
+            logger.info(f"Compute dtype: {policy.compute_dtype}")
+            logger.info(f"Variable dtype: {policy.variable_dtype}")
 
     except RuntimeError as e:
         logger.error(f"❌ Error setting up GPU: {e}")
         logger.info("⚠️ Falling back to CPU")
         tf.config.set_visible_devices([], "GPU")
+
+    # Final device check
+    logical_devices = tf.config.list_logical_devices()
+    for device in logical_devices:
+        logger.info(f"🔍 Available device: {device.name}")

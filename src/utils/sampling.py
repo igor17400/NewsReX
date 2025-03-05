@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from omegaconf import DictConfig
@@ -18,68 +18,175 @@ class ImpressionSampler:
         impressions: List[str],
         news_info: Optional[Dict] = None,
         timestamp: Optional[str] = None,
-    ) -> List[List[str]]:
-        """Sample impressions based on configured strategy.
-
-        Args:
-            impressions: List of impression IDs in format "newsID-clickStatus"
-            news_info: Dictionary containing news metadata (for topic-based sampling)
-            timestamp: Timestamp of the impression (for temporal sampling)
-
+    ) -> Tuple[List[List[int]], List[List[int]]]:
+        """Sample impressions with fixed ratio of positive to negative samples.
+        
         Returns:
-            List of impression groups, where each group contains one positive sample
-            and (max_length-1) negative samples
+            Tuple containing:
+            - List of impression groups, each with 1 positive and k negatives
+            - List of label groups corresponding to each impression group
         """
         # Split impressions into positives and negatives
         positives = []
         negatives = []
         for imp in impressions:
             news_id, label = imp.split("-")
+            news_id = int(news_id.split("N")[1])
             if int(label) == 1:
-                positives.append(imp)
+                positives.append(news_id)
             else:
-                negatives.append(imp)
+                negatives.append(news_id)
 
-        # If no positives, return original list up to max_length
-        if not positives:
-            if len(impressions) <= self.max_length:
-                return [impressions]
-            return [impressions[: self.max_length]]
+        k = self.max_length - 1  # number of negatives per positive
+        all_samples = []
+        all_labels = []
 
-        # Number of negatives needed per positive
-        neg_per_pos = self.max_length - 1
-
-        # Sample groups
-        sampled_groups = []
         for pos in positives:
-            if len(negatives) <= neg_per_pos:
-                # If not enough negatives, use all available
-                group = [pos] + negatives
-                # Pad if necessary
-                if len(group) < self.max_length:
-                    group += [negatives[0]] * (self.max_length - len(group))
-                sampled_groups.append(group)
-            else:
-                # Sample negatives based on strategy
-                if self.strategy == "random":
-                    sampled_negs = self._random_sample_negatives(negatives, neg_per_pos)
-                else:
-                    # Default to random for now
-                    sampled_negs = self._random_sample_negatives(negatives, neg_per_pos)
+            # Select negatives based on strategy
+            neg_samples = self._sample_negatives(
+                negatives, 
+                k, 
+                news_info=news_info, 
+                timestamp=timestamp
+            )
+            
+            # Combine positive and negatives
+            sample = [pos] + neg_samples
+            labels = [1] + [0] * k
+            
+            # Shuffle together
+            combined = list(zip(sample, labels))
+            np.random.shuffle(combined)
+            sample, labels = zip(*combined)
+            
+            # Convert tuples to lists and add to groups
+            all_samples.append(list(sample))
+            all_labels.append(list(labels))
 
-                sampled_groups.append([pos] + sampled_negs)
+        return all_samples, all_labels
 
-        return sampled_groups
+    def _sample_negatives(
+        self, 
+        negatives: List[int], 
+        k: int, 
+        news_info: Optional[Dict] = None,
+        timestamp: Optional[str] = None
+    ) -> List[int]:
+        """Sample k negatives using the configured strategy"""
+        if self.strategy == "random":
+            return self._random_sample_negatives(negatives, k)
+        elif self.strategy == "popularity":
+            return self._popularity_based_negatives(negatives, k, news_info)
+        elif self.strategy == "temporal":
+            return self._temporal_based_negatives(negatives, k, timestamp)
+        elif self.strategy == "topic_diverse":
+            return self._topic_diverse_negatives(negatives, k, news_info)
+        else:
+            logger.warning(f"Unknown strategy {self.strategy}, falling back to random")
+            return self._random_sample_negatives(negatives, k)
 
-    def _random_sample_negatives(self, negatives: List[str], n: int) -> List[str]:
-        """Randomly sample n negatives."""
-        return list(np.random.choice(negatives, size=n, replace=len(negatives) < n))
+    def _random_sample_negatives(self, negatives: List[int], k: int) -> List[int]:
+        """Random sampling strategy"""
+        return list(np.random.choice(
+            negatives, 
+            size=k,
+            replace=len(negatives) < k
+        ))
 
-    def _random_sample(self, impressions: List[str]) -> List[str]:
+    def _popularity_based_negatives(
+        self, 
+        negatives: List[int], 
+        k: int, 
+        news_info: Dict
+    ) -> List[int]:
+        """Sample negatives based on popularity"""
+        if not news_info:
+            return self._random_sample_negatives(negatives, k)
+
+        # Get popularity scores
+        popularity_scores = np.array([
+            news_info.get(nid, {}).get('popularity', 0) 
+            for nid in negatives
+        ])
+        
+        # Normalize scores to probabilities
+        if popularity_scores.sum() > 0:
+            probs = popularity_scores / popularity_scores.sum()
+        else:
+            probs = None  # Will default to uniform distribution
+
+        return list(np.random.choice(
+            negatives,
+            size=k,
+            replace=len(negatives) < k,
+            p=probs
+        ))
+
+    def _temporal_based_negatives(
+        self, 
+        negatives: List[int], 
+        k: int, 
+        timestamp: str
+    ) -> List[int]:
+        """Sample negatives based on temporal proximity"""
+        if not timestamp:
+            return self._random_sample_negatives(negatives, k)
+            
+        # Implementation for temporal sampling
+        # Could consider time difference between impression and news publication
+        return self._random_sample_negatives(negatives, k)  # Placeholder
+
+    def _topic_diverse_negatives(
+        self, 
+        negatives: List[int], 
+        k: int, 
+        news_info: Dict
+    ) -> List[int]:
+        """Sample negatives to ensure topic diversity"""
+        if not news_info:
+            return self._random_sample_negatives(negatives, k)
+
+        # Get categories for negative samples
+        categories = [
+            news_info.get(nid, {}).get('category', 'unknown') 
+            for nid in negatives
+        ]
+        unique_cats = list(set(categories))
+        
+        # Try to sample from different categories
+        samples = []
+        samples_per_cat = max(1, k // len(unique_cats))
+        
+        for cat in unique_cats:
+            cat_negatives = [
+                nid for nid, c in zip(negatives, categories) 
+                if c == cat
+            ]
+            if cat_negatives:
+                samples.extend(np.random.choice(
+                    cat_negatives,
+                    size=min(samples_per_cat, len(cat_negatives)),
+                    replace=False
+                ))
+
+        # Fill remaining slots randomly
+        remaining = k - len(samples)
+        if remaining > 0:
+            remaining_samples = self._random_sample_negatives(
+                [n for n in negatives if n not in samples],
+                remaining
+            )
+            samples.extend(remaining_samples)
+
+        return samples
+
+    def _random_sample(self, impressions: List[int]) -> List[int]:
         """Random sampling strategy."""
-        return np.random.choice(impressions, size=self.max_length, replace=self.cfg.random.replace).tolist()
+        return np.random.choice(
+            impressions, size=self.max_length, replace=self.cfg.random.replace
+        ).tolist()
 
-    def _topic_diverse_sample(self, impressions: List[str], news_info: Dict) -> List[str]:
+    def _topic_diverse_sample(self, impressions: List[int], news_info: Dict) -> List[int]:
         """Topic-diverse sampling strategy."""
         # Implementation for topic diversity
         categories = [news_info[imp]["category"] for imp in impressions]
@@ -92,7 +199,9 @@ class ImpressionSampler:
             weight = self.cfg.topic_diverse.category_weights.get(cat, 1.0)
             n_samples = max(1, int(self.max_length * weight / len(unique_cats)))
             if cat_impressions:
-                sampled.extend(np.random.choice(cat_impressions, size=min(n_samples, len(cat_impressions))))
+                sampled.extend(
+                    np.random.choice(cat_impressions, size=min(n_samples, len(cat_impressions)))
+                )
 
         # Fill remaining slots randomly
         if len(sampled) < self.max_length:
