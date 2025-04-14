@@ -18,12 +18,20 @@ class ImpressionSampler:
         impressions: List[str],
         news_info: Optional[Dict] = None,
         timestamp: Optional[str] = None,
+        is_training: bool = True,
     ) -> Tuple[List[List[int]], List[List[int]]]:
         """Sample impressions with fixed ratio of positive to negative samples.
         
+        Args:
+            impressions: List of impression strings in format "news_id-label"
+            news_info: Optional dictionary containing news metadata
+            timestamp: Optional timestamp for temporal sampling
+            is_training: Whether this is training data (affects sampling strategy)
+        
         Returns:
             Tuple containing:
-            - List of impression groups, each with 1 positive and k negatives
+            - List of impression groups, each with 1 positive and k negatives (training)
+              or a single group with all impressions (validation/testing)
             - List of label groups corresponding to each impression group
         """
         # Split impressions into positives and negatives
@@ -37,6 +45,20 @@ class ImpressionSampler:
             else:
                 negatives.append(news_id)
 
+        if not is_training:
+            # For validation/testing, return all impressions in a single group
+            # Combine and shuffle all impressions
+            all_impressions = positives + negatives
+            all_labels = [1] * len(positives) + [0] * len(negatives)
+            
+            # Shuffle together to avoid order bias
+            combined = list(zip(all_impressions, all_labels))
+            np.random.shuffle(combined)
+            all_impressions, all_labels = zip(*combined)
+            
+            return list(all_impressions), list(all_labels)
+
+        # Training sampling strategy
         k = self.max_length - 1  # number of negatives per positive
         all_samples = []
         all_labels = []
@@ -82,7 +104,6 @@ class ImpressionSampler:
         elif self.strategy == "topic_diverse":
             return self._topic_diverse_negatives(negatives, k, news_info)
         else:
-            logger.warning(f"Unknown strategy {self.strategy}, falling back to random")
             return self._random_sample_negatives(negatives, k)
 
     def _random_sample_negatives(self, negatives: List[int], k: int) -> List[int]:

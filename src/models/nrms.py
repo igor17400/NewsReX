@@ -10,7 +10,7 @@ from tensorflow.keras.layers import (
     TimeDistributed,
 )
 
-from models.base import BaseNewsRecommender
+# from models.base import BaseNewsRecommender #TODO: add an abstract base class
 
 class NewsEncoder(Layer):
     """News encoder with multi-head self-attention."""
@@ -180,44 +180,28 @@ class NRMS(tf.keras.Model):
         )
 
     def call(self, inputs):
-        # print("*******************")
+        # Get inputs
         user_tokens = inputs["user_tokens"]  # Shape: (batch_size, num_history, title_length)
-        # print("--- user_tokens ----")
-        # print(user_tokens.shape)
         user_masks = inputs["user_masks"]    # Shape: (batch_size, num_history)
-        # print("--- user_masks ----")
-        # print(user_masks.shape)
         cand_tokens = inputs["cand_tokens"]  # Shape: (batch_size, num_candidates, title_length)
-        # print("--- cand_tokens ----")
-        # print(cand_tokens.shape)
+        cand_masks = inputs["cand_masks"]    # Shape: (batch_size, num_candidates)
+
         # Get embeddings using embedding layer
         user_embeds = self.embedding_layer(user_tokens)  # (batch, history, title_len, emb_dim)
-        # print("--- user_embeds ----")
-        # print(user_embeds.shape)
         cand_embeds = self.embedding_layer(cand_tokens)  # (batch, cand, title_len, emb_dim)
-        # print("--- cand_embeds ----")
-        # print(cand_embeds.shape)
 
         # Encode each news article independently
         user_news_vec = self.news_encoder(user_embeds)  # (batch, history, news_dim)
-        # print("--- user_news_vec ----")
-        # print(user_news_vec.shape)
         cand_news_vec = self.news_encoder(cand_embeds)  # (batch, cand, news_dim)
-        # print("--- cand_news_vec ----")
-        # print(cand_news_vec.shape)
 
         # Apply masks
         user_news_vec = user_news_vec * tf.cast(user_masks[..., tf.newaxis], user_news_vec.dtype)
-        # print("--- user_news_vec after mask ----")
-        # print(user_news_vec.shape)
+        cand_news_vec = cand_news_vec * tf.cast(cand_masks[..., tf.newaxis], cand_news_vec.dtype)
+
         # Encode user from their history using attention mask
         user_vec = self.user_encoder(user_news_vec, attention_mask=user_masks)  # (batch, user_dim)
-        # print("--- user_vec ----")
-        # print(user_vec.shape)
 
         # Compute click probability
         scores = tf.einsum("bd,bcd->bc", user_vec, cand_news_vec)
-        # print("--- scores ----")
-        # print(scores.shape)
 
         return scores

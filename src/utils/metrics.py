@@ -1,126 +1,117 @@
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import logging
-import numpy as np
 import tensorflow as tf
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.progress import Progress
 
 # Setup logger
 logger = logging.getLogger(__name__)
 
+
 class NewsRecommenderMetrics:
     """Metrics for evaluating news recommendation models"""
 
-    @staticmethod
-    def auc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        """Calculate AUC score"""
-        return tf.keras.metrics.AUC()(y_true, y_pred).numpy()
-
-    @staticmethod
-    def mrr(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-        """Calculate Mean Reciprocal Rank"""
-        indices = np.argsort(-y_pred)
-        ranks = np.where(y_true[indices] == 1)[0] + 1
-        return np.mean(1.0 / ranks) if len(ranks) > 0 else 0.0
-
-    @staticmethod
-    def ndcg(y_true: np.ndarray, y_pred: np.ndarray, k: int = 10) -> float:
-        """Calculate Normalized Discounted Cumulative Gain@K"""
-        indices = np.argsort(-y_pred)[:k]
-        dcg = np.sum(y_true[indices] / np.log2(np.arange(2, len(indices) + 2)))
-
-        # Calculate ideal DCG
-        ideal_indices = np.argsort(-y_true)[:k]
-        idcg = np.sum(y_true[ideal_indices] / np.log2(np.arange(2, len(ideal_indices) + 2)))
-
-        return dcg / idcg if idcg > 0 else 0.0
-
-    @staticmethod
-    def group_metrics(
-        y_true: np.ndarray,
-        y_pred: np.ndarray,
-        impression_ids: List[str],
-        masks: Optional[np.ndarray] = None,
-    ) -> Dict[str, float]:
-        """Calculate metrics for grouped impressions"""
-        metrics: Dict[str, List[float]] = {"auc": [], "mrr": [], "ndcg@5": [], "ndcg@10": []}
-        
-        # Convert tensors to numpy arrays if needed
-        y_true = y_true.numpy() if hasattr(y_true, 'numpy') else y_true
-        y_pred = y_pred.numpy() if hasattr(y_pred, 'numpy') else y_pred
-        masks = masks.numpy() if hasattr(masks, 'numpy') else masks
-        
-        unique_impressions = np.unique(impression_ids)
-        
-        for imp_id in unique_impressions:
-            # Find indices for this impression ID
-            indices = [i for i, x in enumerate(impression_ids) if x == imp_id]
-            
-            # Get data for this impression
-            imp_true = y_true[indices]
-            imp_pred = y_pred[indices]
-            imp_mask = masks[indices] if masks is not None else None
-            
-            if imp_mask is not None:
-                # Apply mask
-                valid_positions = imp_mask == 1
-                imp_true = imp_true[valid_positions]
-                imp_pred = imp_pred[valid_positions]
-            
-            if np.sum(imp_true) > 0:  # Only consider impressions with positive samples
-                metrics["auc"].append(NewsRecommenderMetrics.auc(imp_true, imp_pred))
-                metrics["mrr"].append(NewsRecommenderMetrics.mrr(imp_true, imp_pred))
-                metrics["ndcg@5"].append(NewsRecommenderMetrics.ndcg(imp_true, imp_pred, k=5))
-                metrics["ndcg@10"].append(NewsRecommenderMetrics.ndcg(imp_true, imp_pred, k=10))
-
-        return {k: np.mean(v) if v else 0.0 for k, v in metrics.items()}
-
-    def compute_metrics(self, labels: tf.Tensor, predictions: tf.Tensor, progress=None) -> Dict[str, float]:
-        """Compute all metrics for news recommendation.
-        
-        Args:
-            labels: Ground truth labels [batch_size, num_candidates]
-            predictions: Model predictions [batch_size, num_candidates]
-            progress: Tuple of (progress_bar, task_id) from parent function
-            
-        Returns:
-            Dictionary containing metric values
-        """
-        # Convert tensors to numpy arrays
-        labels_np = labels.numpy()
-        predictions_np = predictions.numpy()
-        
-        
-        # Initialize metric lists
-        aucs = []
-        mrrs = []
-        ndcg5s = []
-        ndcg10s = []
-        
-        # Compute metrics for each sample in the batch
-        for i in range(len(labels_np)):
-            sample_labels = labels_np[i]
-            sample_preds = predictions_np[i]
-            
-            # Calculate metrics for this sample
-            auc = self.auc(sample_labels, sample_preds)
-            mrr = self.mrr(sample_labels, sample_preds)
-            ndcg5 = self.ndcg(sample_labels, sample_preds, k=5)
-            ndcg10 = self.ndcg(sample_labels, sample_preds, k=10)
-            
-            aucs.append(auc)
-            mrrs.append(mrr)
-            ndcg5s.append(ndcg5)
-            ndcg10s.append(ndcg10)
-            
-            # Update progress if provided
-            if progress is not None:
-                progress_bar, task_id = progress
-                progress_bar.update(task_id, advance=1)
-        
-        # Calculate and return final metrics
-        return {
-            "auc": np.mean(aucs),
-            "mrr": np.mean(mrrs),
-            "ndcg@5": np.mean(ndcg5s),
-            "ndcg@10": np.mean(ndcg10s)
+    def __init__(self):
+        self.metrics = {
+            "auc": tf.keras.metrics.AUC(),
+            "mrr": tf.keras.metrics.Mean(),
+            "ndcg@5": tf.keras.metrics.Mean(),
+            "ndcg@10": tf.keras.metrics.Mean(),
         }
+
+    def compute_metrics(self, labels, predictions, masks, progress=None):
+        """Compute metrics using only valid positions."""
+        # Apply masks to predictions and labels
+        masked_predictions = predictions * tf.cast(masks, predictions.dtype)
+        masked_labels = labels * tf.cast(masks, labels.dtype)
+
+        # Compute metrics for each batch
+        results = {}
+        
+        # Process AUC first - handle all valid positions at once
+        valid_indices = tf.where(masks > 0)
+        valid_predictions = tf.gather_nd(masked_predictions, valid_indices)
+        valid_labels = tf.gather_nd(masked_labels, valid_indices)
+        self.metrics["auc"].update_state(valid_labels, valid_predictions)
+        results["auc"] = self.metrics["auc"].result()
+        self.metrics["auc"].reset_state()
+
+        # Process other metrics in a vectorized way
+        batch_size = tf.shape(labels)[0]
+        
+        # Get valid positions for each sequence
+        valid_positions = tf.cast(masks > 0, tf.int32)
+        sequence_lengths = tf.reduce_sum(valid_positions, axis=1)
+        
+        # Compute MRR and NDCG for each sequence
+        for i in range(batch_size):
+            seq_length = sequence_lengths[i]
+            if seq_length > 0:
+                # Get valid predictions and labels for this sequence
+                seq_predictions = masked_predictions[i, :seq_length]
+                seq_labels = masked_labels[i, :seq_length]
+                
+                # Compute MRR
+                mrr_score = self._compute_mrr(seq_labels, seq_predictions)
+                self.metrics["mrr"].update_state(mrr_score)
+                
+                # Compute NDCG@5 and NDCG@10
+                ndcg5_score = self._compute_ndcg(seq_labels, seq_predictions, k=5)
+                self.metrics["ndcg@5"].update_state(ndcg5_score)
+                
+                ndcg10_score = self._compute_ndcg(seq_labels, seq_predictions, k=10)
+                self.metrics["ndcg@10"].update_state(ndcg10_score)
+                
+                if progress is not None:
+                    progress_bar, task_id = progress
+                    progress_bar.update(task_id, advance=1)
+
+        # Get final results
+        results["mrr"] = self.metrics["mrr"].result()
+        results["ndcg@5"] = self.metrics["ndcg@5"].result()
+        results["ndcg@10"] = self.metrics["ndcg@10"].result()
+        
+        # Reset metrics for next batch
+        self.metrics["mrr"].reset_state()
+        self.metrics["ndcg@5"].reset_state()
+        self.metrics["ndcg@10"].reset_state()
+
+        return results
+
+    def _compute_mrr(self, labels, predictions):
+        """Compute Mean Reciprocal Rank."""
+        # Sort predictions and get ranks
+        sorted_indices = tf.argsort(predictions, direction="DESCENDING")
+        ranks = tf.argsort(sorted_indices) + 1
+        
+        # Get rank of first positive
+        positive_ranks = tf.boolean_mask(ranks, labels > 0)
+        if tf.size(positive_ranks) > 0:
+            first_positive_rank = tf.reduce_min(positive_ranks)
+            return 1.0 / tf.cast(first_positive_rank, tf.float32)
+        return 0.0
+
+    def _compute_ndcg(self, labels, predictions, k):
+        """Compute NDCG@k."""
+        # Ensure k is not larger than sequence length
+        k = tf.minimum(k, tf.shape(labels)[0])
+        
+        # Sort predictions and get top k
+        sorted_indices = tf.argsort(predictions, direction="DESCENDING")
+        top_k_indices = sorted_indices[:k]
+        
+        # Get relevance scores for top k
+        top_k_labels = tf.gather(labels, top_k_indices)
+        
+        # Compute DCG
+        ranks = tf.range(1, k + 1, dtype=tf.float32)
+        dcg = tf.reduce_sum(top_k_labels / tf.math.log1p(ranks))
+        
+        # Compute ideal DCG
+        ideal_sorted = tf.sort(labels, direction="DESCENDING")
+        ideal_top_k = ideal_sorted[:k]
+        ideal_dcg = tf.reduce_sum(ideal_top_k / tf.math.log1p(ranks))
+        
+        # Avoid division by zero
+        return tf.cond(
+            ideal_dcg > 0, lambda: dcg / ideal_dcg, lambda: tf.constant(0.0, dtype=tf.float32)
+        )

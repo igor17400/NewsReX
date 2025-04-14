@@ -40,11 +40,17 @@ curl -sSL https://install.python-poetry.org | python3 -
 poetry --version
 ```
 
+3. Make sure to use one Python version 
+
+```
+Python >=3.9,<3.12
+```
+
 ### Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/BTC.git
+git clone https://github.com/igor17400/BTC.git
 cd BTC
 ```
 
@@ -97,18 +103,15 @@ poetry run python src/train.py
 # Train with default configuration (NRMS on MIND-small)
 poetry run python src/train.py
 
-# Train NAML on MIND-large
-poetry run python src/train.py model=naml dataset.dataset.version=large
-
-# Run hyperparameter sweep
-poetry run python src/train.py -m model=naml,nrms dataset.dataset.version=small,large
+# Train NRMS on MIND-small
+poetry run python src/train.py experiment=nrms_mind_small
 ```
 
 ### Evaluation
 
 ```bash
 # Evaluate the best model
-poetry run python src/test.py model=naml dataset=mind
+poetry run python src/test.py experiment=nrms_mind_small
 ```
 
 ## 📁 Project Structure

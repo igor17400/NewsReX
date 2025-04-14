@@ -91,28 +91,6 @@ def train_step(model, batch, optimizer):
     return loss
 
 
-def validation_step(model, batch):
-    """Perform a single validation step."""
-    features, labels = batch
-
-    # Forward pass
-    scores = model(features)
-    
-    # Cast labels to match scores dtype
-    labels = tf.cast(labels, scores.dtype)
-
-    # Calculate loss
-    loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=scores))
-
-    # Calculate AUC (ensure both inputs are float32 for AUC calculation)
-    auc = tf.keras.metrics.AUC()(
-        tf.cast(labels, tf.float32),
-        tf.cast(tf.nn.sigmoid(scores), tf.float32),
-    )
-
-    return loss, auc
-
-
 def get_num_batches(dataset_size: int, batch_size: int) -> int:
     """Calculate number of batches per epoch"""
     return (dataset_size + batch_size - 1) // batch_size
@@ -137,6 +115,7 @@ def validate(model, dataloader, metrics, num_batches, progress, mode="validate")
     val_loss = 0
     all_labels = []
     all_predictions = []
+    all_masks = []  # Store impression masks
     num_processed = 0
 
     # Process each batch
@@ -149,18 +128,24 @@ def validate(model, dataloader, metrics, num_batches, progress, mode="validate")
         scores = model(features)
         predictions = tf.nn.sigmoid(scores)
         
-        # Calculate loss
-        loss = tf.reduce_mean(
-            tf.nn.sigmoid_cross_entropy_with_logits(
-                labels=tf.cast(labels, scores.dtype),
-                logits=scores
-            )
+        # Get impression masks
+        cand_masks = features["cand_masks"]
+        
+        # Calculate loss (only on valid positions)
+        valid_loss = tf.nn.sigmoid_cross_entropy_with_logits(
+            labels=tf.cast(labels, scores.dtype),
+            logits=scores
         )
+        # Apply mask to loss
+        masked_loss = valid_loss * tf.cast(cand_masks, valid_loss.dtype)
+        # Average over valid positions
+        loss = tf.reduce_sum(masked_loss) / tf.reduce_sum(tf.cast(cand_masks, valid_loss.dtype))
         val_loss += float(loss)
         
-        # Collect predictions and labels for metric computation
+        # Collect predictions, labels, and masks for metric computation
         all_labels.append(labels)
         all_predictions.append(predictions)
+        all_masks.append(cand_masks)
         
         # Update progress
         progress.update(val_progress, advance=1)
@@ -169,13 +154,16 @@ def validate(model, dataloader, metrics, num_batches, progress, mode="validate")
     # Make metrics progress visible and update total
     labels = tf.concat(all_labels, axis=0)
     predictions = tf.concat(all_predictions, axis=0)
+    masks = tf.concat(all_masks, axis=0)
+    
     progress.update(metrics_progress, total=len(labels), visible=True)
 
-    # Calculate metrics
+    # Calculate metrics using only valid positions
     metric_values = metrics.compute_metrics(
         labels, 
         predictions,
-        progress=(progress, metrics_progress)  # Pass both progress bar and task ID
+        masks,  # Pass masks to metrics computation
+        progress=(progress, metrics_progress)
     )
     
     # Hide metrics progress bar when done

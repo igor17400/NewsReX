@@ -38,7 +38,7 @@ train:
 
 # Logging
 logging:
-  enable_wandb: true
+  enable_wandb: true 
   project_name: "BTC"
   experiment_name: nrms_mind_small
 

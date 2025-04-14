@@ -41,7 +41,9 @@ class MINDDataset(BaseNewsDataset):
         embedding_type: str = "glove",
         embedding_size: int = 300,
         sampling: DictConfig = None,
-        data_fraction: float = 1.0,
+        data_fraction_train: float = 1.0,
+        data_fraction_val: float = 1.0,
+        data_fraction_test: float = 1.0,
         mode: str = "train",
     ):
         super().__init__()
@@ -58,7 +60,9 @@ class MINDDataset(BaseNewsDataset):
         self.embedding_size = embedding_size
         self.embeddings_manager = EmbeddingsManager(self.cache_manager)
         self.sampler = ImpressionSampler(sampling)
-        self.data_fraction = data_fraction
+        self.data_fraction_train = data_fraction_train
+        self.data_fraction_val = data_fraction_val
+        self.data_fraction_test = data_fraction_test
         self.mode = mode
 
         logger.info(f"Initializing MIND dataset ({version} version)")
@@ -113,6 +117,9 @@ class MINDDataset(BaseNewsDataset):
 
         tokens_file = processed_path / "processed_news.pkl"
         embeddings_file = processed_path / "filtered_embeddings.npy"
+
+        # Check if data has alread been downloaded
+        self.download_dataset()
 
         if not tokens_file.exists() or not embeddings_file.exists():
             logger.info("Processing news data...")
@@ -201,12 +208,14 @@ class MINDDataset(BaseNewsDataset):
                 self.val_behaviors_data = pd.read_pickle(processed_path / "processed_val.pkl")
 
                 # Apply data fraction if needed
-                if self.data_fraction < 1.0:
+                if self.data_fraction_train < 1.0:
                     self.train_behaviors_data = apply_data_fraction(
-                        self.train_behaviors_data, self.data_fraction
+                        self.train_behaviors_data, self.data_fraction_train
                     )
+                
+                if self.data_fraction_val < 1.0:
                     self.val_behaviors_data = apply_data_fraction(
-                        self.val_behaviors_data, self.data_fraction
+                        self.val_behaviors_data, self.data_fraction_val
                     )
 
                 # Display statistics
@@ -225,9 +234,9 @@ class MINDDataset(BaseNewsDataset):
                 self.test_behaviors_data = pd.read_pickle(processed_path / "processed_test.pkl")
 
                 # Apply data fraction if needed
-                if self.data_fraction < 1.0:
+                if self.data_fraction_test < 1.0:
                     self.test_behaviors_data = apply_data_fraction(
-                        self.test_behaviors_data, self.data_fraction
+                        self.test_behaviors_data, self.data_fraction_test
                     )
 
                 # Display statistics
@@ -342,12 +351,14 @@ class MINDDataset(BaseNewsDataset):
         impression_ids = []
         impression_tokens = []
         labels = []
+        impression_masks = []  # New mask for impressions
 
         # Statistics tracking
         total_original_rows = len(behaviors_df)
         total_positives = 0
         rows_with_multiple_positives = 0
         max_positives_in_row = 0
+        max_impressions_length = 0  # Track maximum impressions length
 
         # Create a lookup dictionary from news ID to pre-tokenized titles
         news_tokens = dict(
@@ -367,6 +378,15 @@ class MINDDataset(BaseNewsDataset):
         ) as progress:
             task = progress.add_task(f"Processing {stage} behaviors...", total=len(behaviors_df))
 
+            # First pass: find maximum impressions length
+            for _, row in behaviors_df.iterrows():
+                impressions = row["impressions"].split()
+                max_impressions_length = max(max_impressions_length, len(impressions))
+
+            # Reset progress for second pass
+            progress.reset(task)
+
+            # Parse all behavior rows
             for _, row in behaviors_df.iterrows():
                 # Count positives in this row
                 impressions = row["impressions"].split()
@@ -377,15 +397,15 @@ class MINDDataset(BaseNewsDataset):
                     rows_with_multiple_positives += 1
                 max_positives_in_row = max(max_positives_in_row, positives_count)
 
-                # Process history
+                # -- Process history
                 history = row["history"].split() if pd.notna(row["history"]) else []
                 history = history[-self.max_history_length :]
 
-                # Store indices/tokens instead of embeddings
+                # -- Store indices/tokens instead of embeddings
                 history_indices = [int(h.split("N")[1]) for h in history]
                 curr_history_tokens = [news_tokens[h_idx] for h_idx in history_indices]
 
-                # Pad histories
+                # -- Pad histories
                 history_pad_length = self.max_history_length - len(history)
                 history_indices = [0] * history_pad_length + history_indices
                 curr_history_tokens = [
@@ -393,30 +413,77 @@ class MINDDataset(BaseNewsDataset):
                 ] * history_pad_length + curr_history_tokens
                 history_mask = [0] * history_pad_length + [1] * len(history)
 
-                # Process impressions
-                imp_groups, label_groups = self.sampler.sample_impressions(impressions)
+                # -- Process impressions
+                # imp_groups: List of impression groups, where each group contains:
+                #   - 1 positive news article
+                #   - k negative news articles (k = max_impressions_length - 1)
+                #   - Articles are shuffled within each group
+                # label_groups: List of label groups corresponding to imp_groups, where:
+                #   - 1 represents a positive article
+                #   - 0 represents a negative article
+                imp_groups, label_groups = self.sampler.sample_impressions(
+                    impressions,
+                    is_training=(stage == "train")
+                )
 
-                # For each group (1 positive : k negatives)
-                for imp_group, label_group in zip(imp_groups, label_groups):
-                    # Repeat the same history for this group
+                if stage == "train":
+                    # -- For each group (1 positive : k negatives)
+                    # Some rows have multiple positive articles, so we need to repeat the same history for each group
+                    for imp_group, label_group in zip(imp_groups, label_groups):
+                        # Repeat the same history for this group
+                        histories.append(history_indices)
+                        history_tokens.append(curr_history_tokens)
+                        histories_masks.append(history_mask)
+
+                        # Get tokens for impressions using pre-tokenized version
+                        curr_impression_tokens = [news_tokens[nid] for nid in imp_group]
+
+                        impression_ids.append(imp_group)
+                        impression_tokens.append(curr_impression_tokens)
+                        labels.append(label_group)
+                        impression_masks.append([1] * len(imp_group))  # All positions are valid
+                else:
+                    # -- For validation/testing, handle variable length impressions
+                    # Just change the word to singular to convery that we're dealing with a single group with all impressions
+                    imp_group, label_group = imp_groups, label_groups 
+                    
+                    # Pad impressions to max length
+                    pad_length = max_impressions_length - len(imp_group)
+                    padded_impressions = imp_group + [0] * pad_length
+                    padded_labels = label_group + [0] * pad_length
+                    padded_tokens = [news_tokens[nid] for nid in imp_group] + [
+                        [0] * self.max_title_length
+                    ] * pad_length
+                    
+                    # Create mask for valid positions
+                    impression_mask = [1] * len(imp_group) + [0] * pad_length
+
                     histories.append(history_indices)
                     history_tokens.append(curr_history_tokens)
                     histories_masks.append(history_mask)
-
-                    # Get tokens for impressions using pre-tokenized version
-                    curr_impression_tokens = [news_tokens[nid] for nid in imp_group]
-
-                    impression_ids.append(imp_group)
-                    impression_tokens.append(curr_impression_tokens)
-                    labels.append(label_group)
+                    impression_ids.append(padded_impressions)
+                    impression_tokens.append(padded_tokens)
+                    labels.append(padded_labels)
+                    impression_masks.append(impression_mask)
 
                 progress.advance(task)
 
-        # Calculate statistics
+        # Convert to numpy arrays
+        result = {
+            "histories": np.array(histories, dtype=np.int32),
+            "history_tokens": np.array(history_tokens, dtype=np.int32),
+            "histories_masks": np.array(histories_masks, dtype=np.float32),
+            "impressions": np.array(impression_ids, dtype=np.int32),
+            "impression_tokens": np.array(impression_tokens, dtype=np.int32),
+            "labels": np.array(labels, dtype=np.float32),
+            "impression_masks": np.array(impression_masks, dtype=np.float32),
+        }
+
+        # -- Calculate statistics
         total_processed_rows = len(histories)
         expansion_factor = total_processed_rows / total_original_rows
 
-        # Log statistics
+        # -- Log statistics
         logger.info(f"\nBehavior Processing Statistics ({stage}):")
         logger.info(f"Original number of rows: {total_original_rows:,}")
         logger.info(f"Processed number of rows: {total_processed_rows:,}")
@@ -428,15 +495,9 @@ class MINDDataset(BaseNewsDataset):
         )
         logger.info(f"Maximum positives in a single row: {max_positives_in_row}")
         logger.info(f"Average positives per row: {total_positives/total_original_rows:.2f}")
+        logger.info(f"Maximum impressions length: {max_impressions_length}")
 
-        return {
-            "histories": np.array(histories, dtype=np.int32),
-            "history_tokens": np.array(history_tokens, dtype=np.int32),
-            "impressions": np.array(impression_ids, dtype=np.int32),
-            "impression_tokens": np.array(impression_tokens, dtype=np.int32),
-            "labels": np.array(labels, dtype=np.float32),
-            "histories_masks": np.array(histories_masks, dtype=np.float32),
-        }
+        return result
 
     def get_news(self) -> Tuple[Dict[str, np.ndarray]]:
         """Load and process news data"""
@@ -541,7 +602,6 @@ class MINDDataset(BaseNewsDataset):
 
     def train_dataloader(self, batch_size: int) -> tf.data.Dataset:
         """Create training dataset with token-based inputs."""
-
         return NewsDataLoader.create_train_dataset(
             history_tokens=tf.convert_to_tensor(self.train_behaviors_data["history_tokens"], dtype=tf.int32),
             impression_tokens=tf.convert_to_tensor(
@@ -551,12 +611,14 @@ class MINDDataset(BaseNewsDataset):
             histories_masks=tf.convert_to_tensor(
                 self.train_behaviors_data["histories_masks"], dtype=tf.float32
             ),
+            impression_masks=tf.convert_to_tensor(
+                self.train_behaviors_data["impression_masks"], dtype=tf.float32
+            ),
             batch_size=batch_size,
         )
 
     def val_dataloader(self, batch_size: int) -> tf.data.Dataset:
         """Create validation dataset with token-based inputs."""
-
         return NewsDataLoader.create_eval_dataset(
             history_tokens=tf.convert_to_tensor(
                 self.val_behaviors_data["history_tokens"], dtype=tf.int32
@@ -567,6 +629,9 @@ class MINDDataset(BaseNewsDataset):
             labels=tf.convert_to_tensor(self.val_behaviors_data["labels"], dtype=tf.float32),
             histories_masks=tf.convert_to_tensor(
                 self.val_behaviors_data["histories_masks"], dtype=tf.float32
+            ),
+            impression_masks=tf.convert_to_tensor(
+                self.val_behaviors_data["impression_masks"], dtype=tf.float32
             ),
             batch_size=batch_size,
         )
@@ -583,6 +648,9 @@ class MINDDataset(BaseNewsDataset):
             labels=tf.convert_to_tensor(self.test_behaviors_data["labels"], dtype=tf.float32),
             histories_masks=tf.convert_to_tensor(
                 self.test_behaviors_data["histories_masks"], dtype=tf.float32
+            ),
+            impression_masks=tf.convert_to_tensor(
+                self.test_behaviors_data["impression_masks"], dtype=tf.float32
             ),
             batch_size=batch_size,
         )

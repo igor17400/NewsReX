@@ -10,6 +10,7 @@ class NewsDataLoader:
         impression_tokens: tf.Tensor,
         labels: tf.Tensor,
         histories_masks: tf.Tensor,
+        impression_masks: tf.Tensor,
         batch_size: int,
         buffer_size: int = 10000
     ) -> tf.data.Dataset:
@@ -18,6 +19,7 @@ class NewsDataLoader:
             "user_tokens": history_tokens,
             "user_masks": histories_masks,
             "cand_tokens": impression_tokens,
+            "cand_masks": impression_masks,
         }
         dataset = tf.data.Dataset.from_tensor_slices((features, labels))
         dataset = dataset.cache()
@@ -32,6 +34,7 @@ class NewsDataLoader:
         impression_tokens: tf.Tensor,
         labels: tf.Tensor,
         histories_masks: tf.Tensor,
+        impression_masks: tf.Tensor,
         batch_size: int,
     ) -> tf.data.Dataset:
         """Create evaluation dataset with token inputs."""
@@ -39,6 +42,7 @@ class NewsDataLoader:
             "user_tokens": history_tokens,
             "user_masks": histories_masks,
             "cand_tokens": impression_tokens,
+            "cand_masks": impression_masks,
         }
         
         dataset = tf.data.Dataset.from_tensor_slices((features, labels))
