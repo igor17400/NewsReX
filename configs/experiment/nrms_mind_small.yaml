@@ -19,6 +19,7 @@ dataset:
   version: "small"
   max_title_length: 30
   max_history_length: 50
+  limit_val_test_impressions: true
 
 # Model specific
 model:
@@ -32,7 +33,7 @@ model:
 # Training parameters
 train:
   batch_size: 64
-  num_epochs: 2
+  num_epochs: 10
   learning_rate: 0.0001
   early_stopping_patience: 5
 

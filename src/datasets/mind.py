@@ -45,6 +45,7 @@ class MINDDataset(BaseNewsDataset):
         data_fraction_val: float = 1.0,
         data_fraction_test: float = 1.0,
         mode: str = "train",
+        limit_val_test_impressions: bool = False,
     ):
         super().__init__()
         self.name = name
@@ -64,6 +65,7 @@ class MINDDataset(BaseNewsDataset):
         self.data_fraction_val = data_fraction_val
         self.data_fraction_test = data_fraction_test
         self.mode = mode
+        self.limit_val_test_impressions = limit_val_test_impressions
 
         logger.info(f"Initializing MIND dataset ({version} version)")
         logger.info(f"Data will be stored in: {self.dataset_path}")
@@ -368,6 +370,8 @@ class MINDDataset(BaseNewsDataset):
             )
         )
 
+        logger.info(f"Limit val/test impressions: {self.limit_val_test_impressions}")
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -423,10 +427,10 @@ class MINDDataset(BaseNewsDataset):
                 #   - 0 represents a negative article
                 imp_groups, label_groups = self.sampler.sample_impressions(
                     impressions,
-                    is_training=(stage == "train")
+                    filter_samples=(stage == "train" or (stage in ["val", "test"] and self.limit_val_test_impressions))
                 )
 
-                if stage == "train":
+                if stage == "train" or (stage in ["val", "test"] and self.limit_val_test_impressions):
                     # -- For each group (1 positive : k negatives)
                     # Some rows have multiple positive articles, so we need to repeat the same history for each group
                     for imp_group, label_group in zip(imp_groups, label_groups):

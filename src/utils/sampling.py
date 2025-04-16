@@ -18,7 +18,7 @@ class ImpressionSampler:
         impressions: List[str],
         news_info: Optional[Dict] = None,
         timestamp: Optional[str] = None,
-        is_training: bool = True,
+        filter_samples: bool = True,
     ) -> Tuple[List[List[int]], List[List[int]]]:
         """Sample impressions with fixed ratio of positive to negative samples.
         
@@ -26,7 +26,7 @@ class ImpressionSampler:
             impressions: List of impression strings in format "news_id-label"
             news_info: Optional dictionary containing news metadata
             timestamp: Optional timestamp for temporal sampling
-            is_training: Whether this is training data (affects sampling strategy)
+            filter_samples: Whether we should filter samples based on the sampling strategy
         
         Returns:
             Tuple containing:
@@ -45,7 +45,7 @@ class ImpressionSampler:
             else:
                 negatives.append(news_id)
 
-        if not is_training:
+        if not filter_samples:
             # For validation/testing, return all impressions in a single group
             # Combine and shuffle all impressions
             all_impressions = positives + negatives
