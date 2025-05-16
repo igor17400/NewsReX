@@ -19,13 +19,13 @@ dataset:
   version: "small"
   max_title_length: 30
   max_history_length: 50
-  limit_val_test_impressions: true
+  use_knowledge_graph: false  # Enable/disable knowledge graph processing
 
 # Model specific
 model:
   embedding_size: 300
-  multiheads: 16
-  head_dim: 64
+  multiheads: 8
+  head_dim: 32
   attention_hidden_dim: 200
   dropout_rate: 0.2
   seed: 42
@@ -33,13 +33,13 @@ model:
 # Training parameters
 train:
   batch_size: 64
-  num_epochs: 10
+  num_epochs: 3
   learning_rate: 0.0001
   early_stopping_patience: 5
 
 # Logging
 logging:
-  enable_wandb: true 
+  enable_wandb: false
   project_name: "BTC"
   experiment_name: nrms_mind_small
 

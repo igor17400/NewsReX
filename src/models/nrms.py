@@ -1,4 +1,4 @@
-from typing import Any, Optional, Dict
+from typing import Any, Dict
 
 import tensorflow as tf
 from tensorflow.keras.layers import (
@@ -8,9 +8,11 @@ from tensorflow.keras.layers import (
     MultiHeadAttention,
     Softmax,
     TimeDistributed,
+    Dot,
 )
 
 # from models.base import BaseNewsRecommender #TODO: add an abstract base class
+
 
 class NewsEncoder(Layer):
     """News encoder with multi-head self-attention."""
@@ -31,33 +33,34 @@ class NewsEncoder(Layer):
         self.dropout_rate = dropout_rate
         self.seed = seed
 
-    def build(self, input_shape):
+    def build(self, input_shape: tf.TensorShape) -> None:
         """Build the layer."""
         # Multi-head self attention
         self.multihead_attention = MultiHeadAttention(
-            num_heads=self.multiheads, 
-            key_dim=self.head_dim, 
-            seed=self.seed
+            num_heads=self.multiheads, key_dim=self.head_dim, seed=self.seed
         )
 
-        # Additive attention
+        # Additive attention for final news representation
         self.attention_dense = Dense(
             self.attention_hidden_dim,
             activation="tanh",
             kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
         )
         self.attention_query = Dense(
-            1, 
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed)
+            1, kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed)
         )
         self.attention_softmax = Softmax(axis=1)
-
-        # Dropout for regularization
         self.dropout = Dropout(self.dropout_rate, seed=self.seed)
-        
+
         super().build(input_shape)
 
-    def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
+    def compute_output_shape(self, input_shape):
+        """Compute output shape."""
+        # Input shape: (batch_size, seq_length, embedding_dim)
+        # Output shape: (batch_size, head_dim * multiheads)
+        return (input_shape[0], self.head_dim * self.multiheads)
+
+    def call(self, inputs: tf.Tensor, training: bool = None) -> tf.Tensor:
         """Process title embeddings."""
         # Apply dropout
         title_repr = self.dropout(inputs, training=training)
@@ -91,43 +94,45 @@ class UserEncoder(Layer):
         **kwargs: Any,
     ) -> None:
         super(UserEncoder, self).__init__(**kwargs)
+        self.multiheads = multiheads
+        self.head_dim = head_dim
+        self.attention_hidden_dim = attention_hidden_dim
+        self.seed = seed
 
+    def build(self, input_shape: tf.TensorShape) -> None:
+        """Build the layer."""
         # Multi-head self attention
         self.multihead_attention = MultiHeadAttention(
-            num_heads=multiheads, key_dim=head_dim, seed=seed
+            num_heads=self.multiheads, key_dim=self.head_dim, seed=self.seed
         )
 
-        # Additive attention
+        # Additive attention for final user representation
         self.attention_dense = Dense(
-            attention_hidden_dim,
+            self.attention_hidden_dim,
             activation="tanh",
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed),
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
         )
         self.attention_query = Dense(
-            1, kernel_initializer=tf.keras.initializers.GlorotUniform(seed=seed)
+            1, kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed)
         )
         self.attention_softmax = Softmax(axis=1)
 
-    def call(self, news_vecs: tf.Tensor, attention_mask: tf.Tensor = None) -> tf.Tensor:
+        super().build(input_shape)
+
+    def compute_output_shape(self, input_shape):
+        """Compute output shape."""
+        # Input shape: (batch_size, history_length, news_vector_dim)
+        # Output shape: (batch_size, head_dim * multiheads)
+        return (input_shape[0], self.head_dim * self.multiheads)
+
+    def call(self, news_vecs: tf.Tensor) -> tf.Tensor:
         """Process news vectors from history."""
-        # Multi-head self attention with mask
-        click_repr = self.multihead_attention(
-            query=news_vecs, 
-            key=news_vecs, 
-            value=news_vecs,
-            attention_mask=attention_mask[..., tf.newaxis]  # Add broadcast dim
-        )
+        # Multi-head self attention
+        click_repr = self.multihead_attention(query=news_vecs, key=news_vecs, value=news_vecs)
 
         # Additive attention
         attention_hidden = self.attention_dense(click_repr)
         attention_score = self.attention_query(attention_hidden)
-        
-        # Apply mask to attention scores
-        if attention_mask is not None:
-            attention_score = attention_score * tf.cast(
-                attention_mask[..., tf.newaxis], attention_score.dtype
-            )
-            
         attention_weights = self.attention_softmax(attention_score)
 
         # Weighted sum to get final user vector
@@ -148,60 +153,134 @@ class NRMS(tf.keras.Model):
         seed: int = 42,
     ):
         super().__init__()
-        
-        # Use processed_news instead of dataset
-        self.embedding_layer = tf.keras.layers.Embedding(
-            input_dim=processed_news["vocab_size"],
-            output_dim=embedding_size,
-            embeddings_initializer=tf.keras.initializers.Constant(
-                processed_news["embeddings"]
-            ),
+        self.embedding_size = embedding_size
+        self.multiheads = multiheads
+        self.head_dim = head_dim
+        self.attention_hidden_dim = attention_hidden_dim
+        self.dropout_rate = dropout_rate
+        self.seed = seed
+        self.vocab_size = processed_news["vocab_size"]
+        self.embeddings = processed_news["embeddings"]
+
+        # Build both models
+        self.model, self.scorer = self._build_nrms()
+
+    def _build_nrms(self):
+        """Build both the training model and the scorer model."""
+        # Create input layers
+        history_input = tf.keras.Input(
+            shape=(None, None),  # (history_length, title_length)
+            dtype="int32",
+            name="history_input",
+        )
+
+        # Input for training (multiple candidates)
+        candidate_input = tf.keras.Input(
+            shape=(None, None),  # (num_candidates, title_length)
+            dtype="int32",
+            name="candidate_input",
+        )
+
+        # Input for scoring (single candidate)
+        candidate_input_one_instance = tf.keras.Input(
+            shape=(1, None), dtype="int32", name="candidate_input_one_instance"  # (1, title_length)
+        )
+
+        # Reshape single candidate input
+        candidate_one_instance_reshape = tf.keras.layers.Reshape((-1,))(
+            candidate_input_one_instance
+        )
+
+        # Create embedding layer
+        embedding_layer = tf.keras.layers.Embedding(
+            input_dim=self.vocab_size,
+            output_dim=self.embedding_size,
+            embeddings_initializer=tf.keras.initializers.Constant(self.embeddings),
             trainable=True,
-            mask_zero=True
+            mask_zero=False,
+            name="embedding",
         )
 
-        # News encoder wrapped in TimeDistributed
-        self.news_encoder = TimeDistributed(
-            NewsEncoder(
-                multiheads=multiheads,
-                head_dim=head_dim,
-                attention_hidden_dim=attention_hidden_dim,
-                dropout_rate=dropout_rate,
-                seed=seed
-            )
+        # Create encoders
+        news_encoder = NewsEncoder(
+            multiheads=self.multiheads,
+            head_dim=self.head_dim,
+            attention_hidden_dim=self.attention_hidden_dim,
+            dropout_rate=self.dropout_rate,
+            seed=self.seed,
+            name="news_encoder",
         )
 
-        # User encoder
-        self.user_encoder = UserEncoder(
-            multiheads=multiheads,
-            head_dim=head_dim,
-            attention_hidden_dim=attention_hidden_dim,
-            seed=seed
+        # Create user encoder that uses the news encoder
+        user_encoder = UserEncoder(
+            multiheads=self.multiheads,
+            head_dim=self.head_dim,
+            attention_hidden_dim=self.attention_hidden_dim,
+            seed=self.seed,
+            name="user_encoder",
         )
 
-    def call(self, inputs):
-        # Get inputs
-        user_tokens = inputs["user_tokens"]  # Shape: (batch_size, num_history, title_length)
-        user_masks = inputs["user_masks"]    # Shape: (batch_size, num_history)
-        cand_tokens = inputs["cand_tokens"]  # Shape: (batch_size, num_candidates, title_length)
-        cand_masks = inputs["cand_masks"]    # Shape: (batch_size, num_candidates)
+        # Process user history
+        user_embeds = embedding_layer(history_input)
+        user_news_vec = TimeDistributed(news_encoder)(user_embeds)
+        user_vec = user_encoder(user_news_vec)
 
-        # Get embeddings using embedding layer
-        user_embeds = self.embedding_layer(user_tokens)  # (batch, history, title_len, emb_dim)
-        cand_embeds = self.embedding_layer(cand_tokens)  # (batch, cand, title_len, emb_dim)
+        # Training model: process multiple candidates
+        candidate_embeds = embedding_layer(candidate_input)
+        candidate_news_vec = TimeDistributed(news_encoder)(candidate_embeds)
 
-        # Encode each news article independently
-        user_news_vec = self.news_encoder(user_embeds)  # (batch, history, news_dim)
-        cand_news_vec = self.news_encoder(cand_embeds)  # (batch, cand, news_dim)
+        # Use dot product and softmax for training
+        dot_product = tf.keras.layers.Dot(axes=-1)([candidate_news_vec, user_vec])
+        pred_scores = tf.keras.layers.Activation("softmax")(dot_product)
 
-        # Apply masks
-        user_news_vec = user_news_vec * tf.cast(user_masks[..., tf.newaxis], user_news_vec.dtype)
-        cand_news_vec = cand_news_vec * tf.cast(cand_masks[..., tf.newaxis], cand_news_vec.dtype)
+        # Scorer model: process single candidate
+        candidate_one_embeds = embedding_layer(candidate_one_instance_reshape)
+        candidate_one_vec = news_encoder(candidate_one_embeds)
 
-        # Encode user from their history using attention mask
-        user_vec = self.user_encoder(user_news_vec, attention_mask=user_masks)  # (batch, user_dim)
+        # Use dot product and sigmoid for scoring
+        dot_product_one = tf.keras.layers.Dot(axes=-1)([candidate_one_vec, user_vec])
+        pred_one_score = tf.keras.layers.Activation("sigmoid")(dot_product_one)
 
-        # Compute click probability
-        scores = tf.einsum("bd,bcd->bc", user_vec, cand_news_vec)
+        # Create models
+        model = tf.keras.Model(
+            inputs=[history_input, candidate_input], outputs=pred_scores, name="nrms_model"
+        )
 
-        return scores
+        scorer = tf.keras.Model(
+            inputs=[history_input, candidate_input_one_instance],
+            outputs=pred_one_score,
+            name="nrms_scorer",
+        )
+
+        return model, scorer
+
+    def call(self, inputs, training=True):
+        """Forward pass using the appropriate model."""
+        # Adapt input keys to match model expectations
+        adapted_inputs = {
+            "history_input": inputs["hist_tokens"],
+        }
+
+        if training:
+            adapted_inputs["candidate_input"] = inputs["cand_tokens"]
+            return self.model(adapted_inputs)
+        else:
+            # For validation/testing, reshape the candidates to process them all at once
+            # Shape of cand_tokens: (batch=1, num_candidates, seq_length)
+            _, num_candidates, seq_length = inputs["cand_tokens"].shape
+            
+            # Reshape candidates to (num_candidates, 1, seq_length)
+            reshaped_candidates = tf.reshape(inputs["cand_tokens"], [num_candidates, 1, seq_length])
+            
+            # Repeat history for each candidate
+            repeated_history = tf.repeat(inputs["hist_tokens"], repeats=num_candidates, axis=0)
+            
+            # Process all candidates at once
+            adapted_inputs["history_input"] = repeated_history
+            adapted_inputs["candidate_input_one_instance"] = reshaped_candidates
+            scores = self.scorer(adapted_inputs)
+            
+            # Reshape scores to (1, num_candidates) to match expected output shape
+            scores = tf.reshape(scores, [1, num_candidates])
+            
+            return scores

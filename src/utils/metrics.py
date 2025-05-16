@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 import logging
 import tensorflow as tf
 from rich.progress import Progress
@@ -13,57 +13,42 @@ class NewsRecommenderMetrics:
     def __init__(self):
         self.metrics = {
             "auc": tf.keras.metrics.AUC(),
+            "group_auc": tf.keras.metrics.Mean(),  # Added for group-level AUC
             "mrr": tf.keras.metrics.Mean(),
             "ndcg@5": tf.keras.metrics.Mean(),
             "ndcg@10": tf.keras.metrics.Mean(),
         }
 
-    def compute_metrics(self, labels, predictions, masks, progress=None):
-        """Compute metrics using only valid positions."""
-        # Apply masks to predictions and labels
-        masked_predictions = predictions * tf.cast(masks, predictions.dtype)
-        masked_labels = labels * tf.cast(masks, labels.dtype)
-
-        # Compute metrics for each batch
-        results = {}
-        
-        # Process AUC first - handle all valid positions at once
-        valid_indices = tf.where(masks > 0)
-        valid_predictions = tf.gather_nd(masked_predictions, valid_indices)
-        valid_labels = tf.gather_nd(masked_labels, valid_indices)
-        self.metrics["auc"].update_state(valid_labels, valid_predictions)
-        results["auc"] = self.metrics["auc"].result()
+    def compute_metrics(self, labels, predictions, progress=None):
+        """Compute metrics for the predictions."""
+        # Process regular AUC
+        self.metrics["auc"].update_state(labels, predictions)
+        results = {"auc": self.metrics["auc"].result()}
         self.metrics["auc"].reset_state()
-
-        # Process other metrics in a vectorized way
-        batch_size = tf.shape(labels)[0]
         
-        # Get valid positions for each sequence
-        valid_positions = tf.cast(masks > 0, tf.int32)
-        sequence_lengths = tf.reduce_sum(valid_positions, axis=1)
+        # Process group AUC
+        group_auc = self._compute_group_auc(labels, predictions)
+        results["group_auc"] = group_auc
+        
+        # Process other metrics
+        batch_size = tf.shape(labels)[0]
         
         # Compute MRR and NDCG for each sequence
         for i in range(batch_size):
-            seq_length = sequence_lengths[i]
-            if seq_length > 0:
-                # Get valid predictions and labels for this sequence
-                seq_predictions = masked_predictions[i, :seq_length]
-                seq_labels = masked_labels[i, :seq_length]
-                
-                # Compute MRR
-                mrr_score = self._compute_mrr(seq_labels, seq_predictions)
-                self.metrics["mrr"].update_state(mrr_score)
-                
-                # Compute NDCG@5 and NDCG@10
-                ndcg5_score = self._compute_ndcg(seq_labels, seq_predictions, k=5)
-                self.metrics["ndcg@5"].update_state(ndcg5_score)
-                
-                ndcg10_score = self._compute_ndcg(seq_labels, seq_predictions, k=10)
-                self.metrics["ndcg@10"].update_state(ndcg10_score)
-                
-                if progress is not None:
-                    progress_bar, task_id = progress
-                    progress_bar.update(task_id, advance=1)
+            # Get predictions and labels for this sequence
+            seq_predictions = predictions[i]
+            seq_labels = labels[i]
+            
+            # Compute MRR
+            mrr_score = self._compute_mrr(seq_labels, seq_predictions)
+            self.metrics["mrr"].update_state(mrr_score)
+            
+            # Compute NDCG@5 and NDCG@10
+            ndcg5_score = self._compute_ndcg(seq_labels, seq_predictions, k=5)
+            self.metrics["ndcg@5"].update_state(ndcg5_score)
+            
+            ndcg10_score = self._compute_ndcg(seq_labels, seq_predictions, k=10)
+            self.metrics["ndcg@10"].update_state(ndcg10_score)
 
         # Get final results
         results["mrr"] = self.metrics["mrr"].result()
@@ -76,6 +61,28 @@ class NewsRecommenderMetrics:
         self.metrics["ndcg@10"].reset_state()
 
         return results
+
+    def _compute_group_auc(self, labels, predictions):
+        """Compute AUC per impression group."""
+        # Get impression indices (batch dimension)
+        impression_indices = tf.range(tf.shape(labels)[0])
+        
+        # Compute AUC for each impression
+        group_aucs = []
+        
+        for imp in impression_indices:
+            imp_preds = predictions[imp]
+            imp_labels = labels[imp]
+            
+            if tf.reduce_sum(imp_labels) > 0:  # Only compute if there are positive samples
+                self.metrics["auc"].update_state(imp_labels, imp_preds)
+                group_aucs.append(self.metrics["auc"].result())
+                self.metrics["auc"].reset_state()
+        
+        # Compute mean of group AUCs
+        if group_aucs:
+            return tf.reduce_mean(group_aucs)
+        return tf.constant(0.0, dtype=tf.float32)
 
     def _compute_mrr(self, labels, predictions):
         """Compute Mean Reciprocal Rank."""
