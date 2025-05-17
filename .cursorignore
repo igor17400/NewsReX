@@ -1,0 +1,116 @@
+\
+# General Python #
+####################
+# Virtual environments - covers .venv in root or any subdir like agents/narrative_generator/.venv
+**/.venv/
+**/venv/
+**/ENV/
+**/env/
+
+# Python bytecode
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+wheels/
+
+# IDE / Editor specific #
+#########################
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.komodoproject
+
+# Shell history and temporary files
+.history
+*.swp
+*.swo
+*~
+
+# Testing #
+###########
+.pytest_cache/
+htmlcov/
+.coverage
+*.cover
+ospyra_clover.xml
+ospyra_coverage.xml
+pytestdebug.log
+
+# Operating System Files #
+##########################
+.DS_Store
+Thumbs.db
+
+# Logs #
+########
+*.log
+logs/
+
+# Specific to BTC Project Structure #
+#####################################
+# Poetry lock file - typically version controlled, so NOT ignored
+# poetry.lock 
+
+# Hydra outputs (multirun) - often in outputs/, but can be configured elsewhere
+# If your hydra outputs are always in `outputs/`, that directory can be ignored
+# Or if they follow a specific pattern:
+# **/multirun/
+
+# Large data files, model checkpoints, and run outputs
+# These can be very large and are usually not directly edited.
+# You might want to see `data/` if you are actively editing data loading scripts.
+# data/ # Consider if you want to ignore the whole data directory or specific large sub-folders
+checkpoints/
+wreports/
+wandb/
+outputs/
+.cache/
+
+# Specific to agents/narrative_generator #
+##########################################
+# Results from story generation - useful to see, but can be ignored for general coding
+# agents/narrative_generator/src/story_generation/results/
+
+# Other #
+#########
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# MyPy cache
+.mypy_cache/
+
+# Ruff cache
+.ruff_cache/
+
+# Hatch build environment
+.hatch/
+
+# tox environments
+.tox/
+
+# nox environments
+.nox/
+
+# node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Environment variables file - should be gitignored, and also cursorignored
+.env
+**/.env # for .env files in subdirectories like agents/narrative_generator/ 
