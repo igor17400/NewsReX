@@ -248,7 +248,7 @@ def train(cfg: DictConfig) -> None:
         "val/group_auc": [],
         "val/mrr": [],
         "val/ndcg@5": [],
-        "val/ndcg@10": [],
+        "val/ndcg@10": []
     }
 
     with Progress(
@@ -327,16 +327,27 @@ def train(cfg: DictConfig) -> None:
 
             # Only prepare and log wandb metrics if enabled
             if cfg.logging.enable_wandb:
+                # Prepare metrics dictionary
                 wandb_metrics = {
                     "epoch": epoch,
-                    "train/loss": epoch_metrics["train/loss"],
-                    **{f"val/{k}": v for k, v in val_metrics.items()},
+                    "train/loss": epoch_metrics["train/loss"]
                 }
+                
+                # Add validation metrics with proper prefixes
+                for metric_name, value in val_metrics.items():
+                    if metric_name in ["loss", "auc", "group_auc", "mrr", "ndcg@5", "ndcg@10"]:
+                        wandb_metrics[f"val/{metric_name}"] = value
+                
+                # Log to wandb
                 wandb.log(wandb_metrics)
 
-                # Store metrics history
+                # Update history
                 for k, v in wandb_metrics.items():
-                    wandb_history[k].append(float(v))
+                    if k in wandb_history:
+                        try:
+                            wandb_history[k].append(float(v))
+                        except (ValueError, TypeError) as e:
+                            console.log(f"Could not convert metric {k} with value {v} to float: {e}")
 
             # Save last model after each epoch
             model.save_weights(last_model_path)
@@ -385,7 +396,7 @@ def train(cfg: DictConfig) -> None:
             console.log("\n[bold yellow]Starting Testing Phase...")
             test_metrics = validate(
                 model,
-                dataset.test_dataloader(cfg.train.batch_size),
+                dataset.test_dataloader(),
                 metrics,
                 get_num_batches(dataset.test_size, cfg.train.batch_size),
                 progress,

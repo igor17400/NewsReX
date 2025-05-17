@@ -126,8 +126,8 @@ class MINDDataset(BaseNewsDataset):
         os.makedirs(processed_path, exist_ok=True)
 
         tokens_file = processed_path / "processed_news.pkl"
-        # embeddings_file = processed_path / "filtered_embeddings.npy"
-        embeddings_file = processed_path / "embedding.npy"
+        embeddings_file = processed_path / "filtered_embeddings.npy"
+        # embeddings_file = processed_path / "embedding.npy"
 
         # Check if data has alread been downloaded
         self.download_dataset()

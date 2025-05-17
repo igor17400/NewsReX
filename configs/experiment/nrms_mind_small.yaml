@@ -33,13 +33,13 @@ model:
 # Training parameters
 train:
   batch_size: 64
-  num_epochs: 3
+  num_epochs: 5
   learning_rate: 0.0001
   early_stopping_patience: 5
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "BTC"
   experiment_name: nrms_mind_small
 
