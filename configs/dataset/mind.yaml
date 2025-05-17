@@ -23,5 +23,8 @@ max_abstract_length: 100
 max_history_length: 50
 max_impressions_length: 5
 
+# Knowledge graph configuration
+use_knowledge_graph: false  # Enable/disable knowledge graph processing
+
 # Pass sampling configuration directly
 sampling: ${sampling}

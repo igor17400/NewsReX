@@ -5,6 +5,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import json
 import datetime
+import numpy as np
 
 from pathlib import Path
 from typing import Any, Dict, Tuple
@@ -65,14 +66,18 @@ def train_step(model, batch, optimizer):
     features, labels = batch
 
     with tf.GradientTape() as tape:
-        # Forward pass
-        scores = model(features)
+        # Forward pass (will apply softmax internally)
+        scores = model(features, training=True)
 
-        # Cast both labels and masks to match scores dtype
+        # Cast labels to match scores dtype
         labels = tf.cast(labels, scores.dtype)
 
-        # Calculate loss with properly cast tensors
-        loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=scores))
+        # Calculate categorical crossentropy loss
+        loss = tf.reduce_mean(
+            tf.keras.losses.categorical_crossentropy(
+                labels, scores, from_logits=False  # scores already have softmax applied
+            )
+        )
 
         # Scale loss for mixed precision
         if isinstance(optimizer, tf.keras.mixed_precision.LossScaleOptimizer):
@@ -96,87 +101,82 @@ def get_num_batches(dataset_size: int, batch_size: int) -> int:
     return (dataset_size + batch_size - 1) // batch_size
 
 
-def validate(model, dataloader, metrics, num_batches, progress, mode="validate"):
-    """Run validation/testing."""
+def validate(model, dataloader, metrics, num_impressions, progress, mode="validate"):
+    """Run validation/testing using impression-by-impression processing."""
     # Create progress bar for validation
-    val_progress = progress.add_task(
-        f"Running {mode}...", 
-        total=num_batches,
-        visible=True
-    )
-
-    # Create progress bar for metrics computation
-    metrics_progress = progress.add_task(
-        "Computing metrics...",
-        visible=False  # Start as invisible until we need it
-    )
+    val_progress = progress.add_task(f"Running {mode}...", total=num_impressions, visible=True)
 
     # Initialize metrics
     val_loss = 0
-    all_labels = []
-    all_predictions = []
-    all_masks = []  # Store impression masks
+    metric_values = {
+        "auc": [],
+        "mrr": [],
+        "ndcg@5": [],
+        "ndcg@10": [],
+        "group_auc": []
+    }
     num_processed = 0
 
-    # Process each batch
-    for batch in dataloader:
-        if num_processed >= num_batches:
+    # Process each impression
+    for features, labels, impression_ids in dataloader:
+        if num_processed >= num_impressions:
             break
             
-        # Get predictions
-        features, labels = batch
-        scores = model(features)
-        predictions = tf.nn.sigmoid(scores)
+        # Get predictions (will apply sigmoid internally)
+        scores = model(features, training=False)
         
-        # Get impression masks
-        cand_masks = features["cand_masks"]
+        # Ensure consistent dtype (float32) for metrics computation
+        scores = tf.cast(scores, tf.float32)
+        labels = tf.cast(labels, tf.float32)
         
-        # Calculate loss (only on valid positions)
-        valid_loss = tf.nn.sigmoid_cross_entropy_with_logits(
-            labels=tf.cast(labels, scores.dtype),
-            logits=scores
+        # Calculate loss using categorical crossentropy
+        loss = tf.reduce_mean(
+            tf.keras.losses.categorical_crossentropy(
+                labels,
+                scores,
+                from_logits=False  # scores already have activation applied
+            )
         )
-        # Apply mask to loss
-        masked_loss = valid_loss * tf.cast(cand_masks, valid_loss.dtype)
-        # Average over valid positions
-        loss = tf.reduce_sum(masked_loss) / tf.reduce_sum(tf.cast(cand_masks, valid_loss.dtype))
+        
         val_loss += float(loss)
+
+        # Calculate metrics for this impression
+        impression_metrics = metrics.compute_metrics(
+            labels,
+            scores,
+            progress=None
+        )
         
-        # Collect predictions, labels, and masks for metric computation
-        all_labels.append(labels)
-        all_predictions.append(predictions)
-        all_masks.append(cand_masks)
-        
+        # Store metrics for this impression
+        for metric_name, value in impression_metrics.items():
+            metric_values[metric_name].append(float(value))
+
         # Update progress
         progress.update(val_progress, advance=1)
         num_processed += 1
 
-    # Make metrics progress visible and update total
-    labels = tf.concat(all_labels, axis=0)
-    predictions = tf.concat(all_predictions, axis=0)
-    masks = tf.concat(all_masks, axis=0)
-    
-    progress.update(metrics_progress, total=len(labels), visible=True)
+        # Clear memory after each impression
+        tf.keras.backend.clear_session()
 
-    # Calculate metrics using only valid positions
-    metric_values = metrics.compute_metrics(
-        labels, 
-        predictions,
-        masks,  # Pass masks to metrics computation
-        progress=(progress, metrics_progress)
-    )
-    
-    # Hide metrics progress bar when done
-    progress.update(metrics_progress, visible=False)
-    
-    # Calculate average loss
-    val_loss /= num_processed
+    try:
+        # Calculate average metrics across all impressions
+        final_metrics = {
+            "loss": val_loss / num_processed
+        }
+        
+        # Average all collected metrics
+        for metric_name, values in metric_values.items():
+            if values:  # Only compute if we have values
+                final_metrics[metric_name] = sum(values) / len(values)
+            else:
+                final_metrics[metric_name] = 0.0
 
-    # Convert all values to Python floats for JSON serialization
-    return {
-        "loss": float(val_loss),
-        **{k: float(v) for k, v in metric_values.items()}
-    }
+        final_metrics["num_impressions"] = num_processed
+        return final_metrics
+
+    finally:
+        # Clear memory
+        tf.keras.backend.clear_session()
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -227,6 +227,7 @@ def train(cfg: DictConfig) -> None:
         "epoch": 0,
         "loss": float("inf"),  # Initialize with infinity
         "auc": 0.0,
+        "group_auc": 0.0,  # Add group_auc
         "mrr": 0.0,
         "ndcg@5": 0.0,
         "ndcg@10": 0.0,
@@ -244,6 +245,7 @@ def train(cfg: DictConfig) -> None:
         "train/loss": [],
         "val/loss": [],
         "val/auc": [],
+        "val/group_auc": [],
         "val/mrr": [],
         "val/ndcg@5": [],
         "val/ndcg@10": []
@@ -259,6 +261,22 @@ def train(cfg: DictConfig) -> None:
         TimeRemainingColumn(),
         expand=True,
     ) as progress:
+        # Run initial validation to get baseline performance
+        console.log("\n[bold yellow]Running initial validation (before training)...")
+        initial_metrics = validate(
+            model,
+            dataset.val_dataloader(),
+            metrics,
+            num_val_batches,
+            progress,
+            mode="initial validation",
+        )
+
+        # Log initial metrics
+        console.log("\n[bold yellow]Initial Metrics (before training):")
+        for metric_name, value in initial_metrics.items():
+            console.log(f"[bold blue]{metric_name}: {value:.4f}")
+
         epoch_progress = progress.add_task(
             f"Training for {cfg.train.num_epochs} epochs", total=cfg.train.num_epochs
         )
@@ -300,7 +318,7 @@ def train(cfg: DictConfig) -> None:
             # Validation
             val_metrics = validate(
                 model,
-                dataset.val_dataloader(cfg.train.batch_size),
+                dataset.val_dataloader(),
                 metrics,
                 num_val_batches,
                 progress,
@@ -309,16 +327,27 @@ def train(cfg: DictConfig) -> None:
 
             # Only prepare and log wandb metrics if enabled
             if cfg.logging.enable_wandb:
+                # Prepare metrics dictionary
                 wandb_metrics = {
                     "epoch": epoch,
-                    "train/loss": epoch_metrics["train/loss"],
-                    **{f"val/{k}": v for k, v in val_metrics.items()},
+                    "train/loss": epoch_metrics["train/loss"]
                 }
+                
+                # Add validation metrics with proper prefixes
+                for metric_name, value in val_metrics.items():
+                    if metric_name in ["loss", "auc", "group_auc", "mrr", "ndcg@5", "ndcg@10"]:
+                        wandb_metrics[f"val/{metric_name}"] = value
+                
+                # Log to wandb
                 wandb.log(wandb_metrics)
 
-                # Store metrics history
+                # Update history
                 for k, v in wandb_metrics.items():
-                    wandb_history[k].append(float(v))
+                    if k in wandb_history:
+                        try:
+                            wandb_history[k].append(float(v))
+                        except (ValueError, TypeError) as e:
+                            console.log(f"Could not convert metric {k} with value {v} to float: {e}")
 
             # Save last model after each epoch
             model.save_weights(last_model_path)
@@ -367,7 +396,7 @@ def train(cfg: DictConfig) -> None:
             console.log("\n[bold yellow]Starting Testing Phase...")
             test_metrics = validate(
                 model,
-                dataset.test_dataloader(cfg.train.batch_size),
+                dataset.test_dataloader(),
                 metrics,
                 get_num_batches(dataset.test_size, cfg.train.batch_size),
                 progress,
@@ -402,6 +431,7 @@ def train(cfg: DictConfig) -> None:
             # Save metrics to the run directory
             metrics_path = run_dir / "metrics.json"
             metrics_data = {
+                "initial": {k: float(v) for k, v in initial_metrics.items()},
                 "best_validation": {k: float(v) for k, v in best_metrics.items()},
                 "test": {k: float(v) for k, v in test_metrics.items()},
             }

@@ -14,8 +14,8 @@ def display_statistics(data_dict: Dict[str, Dict], mode: str = "train") -> None:
 
     if mode == "train":
         num_news = len(data_dict["news"]["news_ids"])
-        num_train_behaviors = len(data_dict["train_behaviors"]["histories"])
-        num_val_behaviors = len(data_dict["val_behaviors"]["histories"])
+        num_train_behaviors = len(data_dict["train_behaviors"]["histories_news_ids"])
+        num_val_behaviors = len(data_dict["val_behaviors"]["histories_news_ids"])
 
         logger.info(f"Number of news articles: {num_news}")
         logger.info(f"Number of training behaviors: {num_train_behaviors}")
@@ -23,16 +23,16 @@ def display_statistics(data_dict: Dict[str, Dict], mode: str = "train") -> None:
 
         # Additional statistics using NumPy
         avg_history_length = np.mean(
-            [len(history) for history in data_dict["train_behaviors"]["histories"]]
+            [len(history) for history in data_dict["train_behaviors"]["history_news_tokens"]]
         )
         avg_impressions_length = np.mean(
-            [len(impression) for impression in data_dict["train_behaviors"]["impressions"]]
+            [len(impression) for impression in data_dict["train_behaviors"]["candidate_news_tokens"]]
         )
         avg_history_length_val = np.mean(
-            [len(history) for history in data_dict["val_behaviors"]["histories"]]
+            [len(history) for history in data_dict["val_behaviors"]["history_news_tokens"]]
         )
         avg_impressions_length_val = np.mean(
-            [len(impression) for impression in data_dict["val_behaviors"]["impressions"]]
+            [len(impression) for impression in data_dict["val_behaviors"]["candidate_news_tokens"]]
         )
 
         logger.info(f"Average history length: {avg_history_length:.2f}")
@@ -41,16 +41,16 @@ def display_statistics(data_dict: Dict[str, Dict], mode: str = "train") -> None:
         logger.info(f"Average impressions length (validation): {avg_impressions_length_val:.2f}")
     else:
         num_test_news = len(data_dict["news"]["news_ids"])
-        num_test_behaviors = len(data_dict["test_behaviors"]["histories"])
+        num_test_behaviors = len(data_dict["test_behaviors"]["histories_news_ids"])
 
         logger.info(f"Number of news articles: {num_test_news}")
         logger.info(f"Number of test behaviors: {num_test_behaviors}")
 
         avg_history_length_test = np.mean(
-            [len(history) for history in data_dict["test_behaviors"]["histories"]]
+            [len(history) for history in data_dict["test_behaviors"]["history_news_tokens"]]
         )
         avg_impressions_length_test = np.mean(
-            [len(impression) for impression in data_dict["test_behaviors"]["impressions"]]
+            [len(impression) for impression in data_dict["test_behaviors"]["candidate_news_tokens"]]
         )
 
         logger.info(f"Average history length (test): {avg_history_length_test:.2f}")

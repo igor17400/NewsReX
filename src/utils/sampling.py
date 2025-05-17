@@ -2,6 +2,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from omegaconf import DictConfig
+import random
 
 
 class ImpressionSampler:
@@ -13,39 +14,36 @@ class ImpressionSampler:
         self.strategy = cfg.strategy
         np.random.seed(cfg.random_seed)
 
-    def sample_impressions(
+    def sample_candidates_news(
         self,
-        impressions: List[str],
+        stage: str,
+        candidates: List[str],
         news_info: Optional[Dict] = None,
         timestamp: Optional[str] = None,
-        is_training: bool = True,
     ) -> Tuple[List[List[int]], List[List[int]]]:
-        """Sample impressions with fixed ratio of positive to negative samples.
+        """Sample candidate news with fixed ratio of positive to negative samples.
         
         Args:
-            impressions: List of impression strings in format "news_id-label"
+            candidates: List of candidtes news strings in format "<news_id>-<label>"
             news_info: Optional dictionary containing news metadata
             timestamp: Optional timestamp for temporal sampling
-            is_training: Whether this is training data (affects sampling strategy)
-        
         Returns:
             Tuple containing:
-            - List of impression groups, each with 1 positive and k negatives (training)
-              or a single group with all impressions (validation/testing)
-            - List of label groups corresponding to each impression group
+            - List of candidates news groups, each with 1 positive and k negatives (training)
+            - List of label groups corresponding to each candidate news group (indicating if the news is clicked or not)
         """
         # Split impressions into positives and negatives
         positives = []
         negatives = []
-        for imp in impressions:
-            news_id, label = imp.split("-")
+        for can_news in candidates:
+            news_id, label = can_news.split("-")
             news_id = int(news_id.split("N")[1])
             if int(label) == 1:
                 positives.append(news_id)
             else:
                 negatives.append(news_id)
 
-        if not is_training:
+        if (stage == "val" or stage == "test"): 
             # For validation/testing, return all impressions in a single group
             # Combine and shuffle all impressions
             all_impressions = positives + negatives
@@ -107,12 +105,21 @@ class ImpressionSampler:
             return self._random_sample_negatives(negatives, k)
 
     def _random_sample_negatives(self, negatives: List[int], k: int) -> List[int]:
-        """Random sampling strategy"""
-        return list(np.random.choice(
-            negatives, 
-            size=k,
-            replace=len(negatives) < k
-        ))
+        """Random sampling strategy. 
+        
+        Args:
+            negatives: List of negative samples
+            k: Number of samples to return
+            
+        Returns:
+            List of sampled negative items
+        """
+        if k > len(negatives):
+            # If we need more samples than available, repeat the list and sample
+            repeated_negatives = negatives * (k // len(negatives) + 1)
+            return list(np.random.choice(repeated_negatives, size=k, replace=False))
+        else:
+            return list(np.random.choice(negatives, size=k, replace=False))
 
     def _popularity_based_negatives(
         self, 
@@ -134,14 +141,25 @@ class ImpressionSampler:
         if popularity_scores.sum() > 0:
             probs = popularity_scores / popularity_scores.sum()
         else:
-            probs = None  # Will default to uniform distribution
+            return self._random_sample_negatives(negatives, k)
 
-        return list(np.random.choice(
-            negatives,
-            size=k,
-            replace=len(negatives) < k,
-            p=probs
-        ))
+        # Handle case where we need more samples than available
+        if k > len(negatives):
+            repeated_negatives = negatives * (k // len(negatives) + 1)
+            repeated_probs = np.tile(probs, k // len(negatives) + 1)[:k]
+            return list(np.random.choice(
+                repeated_negatives,
+                size=k,
+                replace=False,
+                p=repeated_probs
+            ))
+        else:
+            return list(np.random.choice(
+                negatives,
+                size=k,
+                replace=False,
+                p=probs
+            ))
 
     def _temporal_based_negatives(
         self, 
@@ -184,11 +202,20 @@ class ImpressionSampler:
                 if c == cat
             ]
             if cat_negatives:
-                samples.extend(np.random.choice(
-                    cat_negatives,
-                    size=min(samples_per_cat, len(cat_negatives)),
-                    replace=False
-                ))
+                # Use the same sampling strategy as random sampling
+                if samples_per_cat > len(cat_negatives):
+                    repeated_negatives = cat_negatives * (samples_per_cat // len(cat_negatives) + 1)
+                    samples.extend(np.random.choice(
+                        repeated_negatives,
+                        size=min(samples_per_cat, len(repeated_negatives)),
+                        replace=False
+                    ))
+                else:
+                    samples.extend(np.random.choice(
+                        cat_negatives,
+                        size=min(samples_per_cat, len(cat_negatives)),
+                        replace=False
+                    ))
 
         # Fill remaining slots randomly
         remaining = k - len(samples)
@@ -199,7 +226,7 @@ class ImpressionSampler:
             )
             samples.extend(remaining_samples)
 
-        return samples
+        return samples[:k]  # Ensure we return exactly k samples
 
     def _random_sample(self, impressions: List[int]) -> List[int]:
         """Random sampling strategy."""
