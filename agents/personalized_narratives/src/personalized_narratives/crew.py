@@ -2,6 +2,7 @@ from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List
+from pathlib import Path
 from personalized_narratives.tools.exa_search_tool import ExaSearchTool
 
 # If you want to run a snippet of code before or after the crew starts,
@@ -15,6 +16,14 @@ class PersonalizedNarratives:
 
     agents: List[BaseAgent]
     tasks: List[Task]
+    article_output_path: Path
+
+    def __init__(self, article_output_path: Path = Path(".")):
+        """Initialize with an article-specific output path."""
+        self.article_output_path = article_output_path
+        # Ensure the base for task outputs exists (e.g., output/news_N123/outputs/)
+        # The tasks will write into this directory.
+        (self.article_output_path / "outputs").mkdir(parents=True, exist_ok=True)
 
     # Learn more about YAML configuration files here:
     # Agents: https://docs.crewai.com/concepts/agents#yaml-configuration-recommended
@@ -53,7 +62,7 @@ class PersonalizedNarratives:
     def extract_topics_entities(self) -> Task:
         return Task(
             config=self.tasks_config["extract_topics_entities"],  # type: ignore[index]
-            output_file="outputs/topics_entities.json",
+            output_file=str(self.article_output_path / "outputs" / "topics_entities.json"),
             inputs={"title": "{title}", "abstract": "{abstract}"},
         )
 
@@ -61,7 +70,7 @@ class PersonalizedNarratives:
     def retrieve_candidate_articles(self) -> Task:
         return Task(
             config=self.tasks_config["retrieve_candidate_articles"],
-            output_file="outputs/exa_results.json",
+            output_file=str(self.article_output_path / "outputs" / "exa_results.json"),
             inputs={"publication_date": "{publication_date}"},
         )
 
@@ -69,21 +78,21 @@ class PersonalizedNarratives:
     def filter_and_rank_articles(self) -> Task:
         return Task(
             config=self.tasks_config["filter_and_rank_articles"],  # type: ignore[index]
-            output_file="outputs/ranked_articles.json",
+            output_file=str(self.article_output_path / "outputs" / "ranked_articles.json"),
         )
 
     @task
     def synthesize_background(self) -> Task:
         return Task(
             config=self.tasks_config["synthesize_background"],  # type: ignore[index]
-            output_file="outputs/background_section.md",
+            output_file=str(self.article_output_path / "outputs" / "background_section.md"),
         )
 
     @task
     def compose_storytelling_news(self) -> Task:
         return Task(
             config=self.tasks_config["compose_storytelling_news"],  # type: ignore[index]
-            output_file="outputs/storytelling_news.md",
+            output_file=str(self.article_output_path / "outputs" / "storytelling_news.md"),
         )
 
     @crew
