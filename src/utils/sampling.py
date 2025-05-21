@@ -18,6 +18,7 @@ class ImpressionSampler:
         self,
         stage: str,
         candidates: List[str],
+        random_train_samples: bool = False,
         news_info: Optional[Dict] = None,
         timestamp: Optional[str] = None,
     ) -> Tuple[List[List[int]], List[List[int]]]:
@@ -74,10 +75,11 @@ class ImpressionSampler:
             sample = [pos] + neg_samples
             labels = [1] + [0] * k
             
-            # Shuffle together
-            combined = list(zip(sample, labels))
-            np.random.shuffle(combined)
-            sample, labels = zip(*combined)
+            if random_train_samples:
+                # Shuffle together
+                combined = list(zip(sample, labels))
+                np.random.shuffle(combined)
+                sample, labels = zip(*combined)
             
             # Convert tuples to lists and add to groups
             all_samples.append(list(sample))

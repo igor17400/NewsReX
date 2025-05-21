@@ -108,45 +108,32 @@ def validate(model, dataloader, metrics, num_impressions, progress, mode="valida
 
     # Initialize metrics
     val_loss = 0
-    metric_values = {
-        "auc": [],
-        "mrr": [],
-        "ndcg@5": [],
-        "ndcg@10": [],
-        "group_auc": []
-    }
+    metric_values = {"auc": [], "mrr": [], "ndcg@5": [], "ndcg@10": [], "group_auc": []}
     num_processed = 0
 
     # Process each impression
     for features, labels, impression_ids in dataloader:
         if num_processed >= num_impressions:
             break
-            
+
         # Get predictions (will apply sigmoid internally)
         scores = model(features, training=False)
-        
+
         # Ensure consistent dtype (float32) for metrics computation
         scores = tf.cast(scores, tf.float32)
         labels = tf.cast(labels, tf.float32)
-        
-        # Calculate loss using categorical crossentropy
-        loss = tf.reduce_mean(
-            tf.keras.losses.categorical_crossentropy(
-                labels,
-                scores,
-                from_logits=False  # scores already have activation applied
-            )
-        )
-        
+
+        # Calculate loss using BinaryCrossentropy for sigmoid outputs
+        bce_loss_fn = tf.keras.losses.BinaryCrossentropy(
+            from_logits=False
+        )  # Scores are already probabilities
+        loss = bce_loss_fn(labels, scores)  # Computes BCE for each item and then averages
+
         val_loss += float(loss)
 
         # Calculate metrics for this impression
-        impression_metrics = metrics.compute_metrics(
-            labels,
-            scores,
-            progress=None
-        )
-        
+        impression_metrics = metrics.compute_metrics(labels, scores, progress=None)
+
         # Store metrics for this impression
         for metric_name, value in impression_metrics.items():
             metric_values[metric_name].append(float(value))
@@ -155,28 +142,16 @@ def validate(model, dataloader, metrics, num_impressions, progress, mode="valida
         progress.update(val_progress, advance=1)
         num_processed += 1
 
-        # Clear memory after each impression
-        tf.keras.backend.clear_session()
+    # Calculate average metrics across all impressions
+    final_metrics = {"loss": val_loss / num_processed}
 
-    try:
-        # Calculate average metrics across all impressions
-        final_metrics = {
-            "loss": val_loss / num_processed
-        }
-        
-        # Average all collected metrics
-        for metric_name, values in metric_values.items():
-            if values:  # Only compute if we have values
-                final_metrics[metric_name] = sum(values) / len(values)
-            else:
-                final_metrics[metric_name] = 0.0
+    # Average all collected metrics
+    for metric_name, values in metric_values.items():
+        # Only compute if we have values
+        final_metrics[metric_name] = sum(values) / len(values) if values else 0.0
 
-        final_metrics["num_impressions"] = num_processed
-        return final_metrics
-
-    finally:
-        # Clear memory
-        tf.keras.backend.clear_session()
+    final_metrics["num_impressions"] = num_processed
+    return final_metrics
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -248,7 +223,7 @@ def train(cfg: DictConfig) -> None:
         "val/group_auc": [],
         "val/mrr": [],
         "val/ndcg@5": [],
-        "val/ndcg@10": []
+        "val/ndcg@10": [],
     }
 
     with Progress(
@@ -328,16 +303,13 @@ def train(cfg: DictConfig) -> None:
             # Only prepare and log wandb metrics if enabled
             if cfg.logging.enable_wandb:
                 # Prepare metrics dictionary
-                wandb_metrics = {
-                    "epoch": epoch,
-                    "train/loss": epoch_metrics["train/loss"]
-                }
-                
+                wandb_metrics = {"epoch": epoch, "train/loss": epoch_metrics["train/loss"]}
+
                 # Add validation metrics with proper prefixes
                 for metric_name, value in val_metrics.items():
                     if metric_name in ["loss", "auc", "group_auc", "mrr", "ndcg@5", "ndcg@10"]:
                         wandb_metrics[f"val/{metric_name}"] = value
-                
+
                 # Log to wandb
                 wandb.log(wandb_metrics)
 
@@ -347,7 +319,9 @@ def train(cfg: DictConfig) -> None:
                         try:
                             wandb_history[k].append(float(v))
                         except (ValueError, TypeError) as e:
-                            console.log(f"Could not convert metric {k} with value {v} to float: {e}")
+                            console.log(
+                                f"Could not convert metric {k} with value {v} to float: {e}"
+                            )
 
             # Save last model after each epoch
             model.save_weights(last_model_path)

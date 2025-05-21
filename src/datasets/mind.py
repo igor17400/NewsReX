@@ -48,7 +48,11 @@ class MINDDataset(BaseNewsDataset):
         data_fraction_val: float = 1.0,
         data_fraction_test: float = 1.0,
         mode: str = "train",
-        use_knowledge_graph: bool = False,  # Parameter for knowledge graph
+        use_knowledge_graph: bool = False,  
+        random_train_samples: bool = False,
+        validation_split_strategy: str = "chronological",
+        validation_split_percentage: float = 0.05,
+        validation_split_seed: Optional[int] = None,
     ):
         super().__init__()
         self.name = name
@@ -69,6 +73,12 @@ class MINDDataset(BaseNewsDataset):
         self.data_fraction_val = data_fraction_val
         self.data_fraction_test = data_fraction_test
         self.mode = mode
+        self.random_train_samples = random_train_samples
+
+        # Store validation split parameters
+        self.validation_split_strategy = validation_split_strategy
+        self.validation_split_percentage = validation_split_percentage
+        self.validation_split_seed = validation_split_seed if validation_split_seed is not None else random_seed
 
         # Knowledge graph related attributes
         self.entity_embeddings = {}
@@ -525,6 +535,7 @@ class MINDDataset(BaseNewsDataset):
                 cand_nid_group_list, label_group_list = self.sampler.sample_candidates_news(
                     stage=stage,
                     candidates=impressions,
+                    random_train_samples=self.random_train_samples,
                 )
 
                 if stage == "train":
@@ -634,7 +645,7 @@ class MINDDataset(BaseNewsDataset):
         self,
         sampled_user_set: Optional[Set[str]] = None,
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-        """Load and process training data"""
+        """Load and process training data, splitting into train and validation sets."""
         # Process behaviors
         behaviors_df = pd.read_csv(
             self.dataset_path / "train" / "behaviors.tsv",
@@ -647,13 +658,29 @@ class MINDDataset(BaseNewsDataset):
         if sampled_user_set is not None:
             behaviors_df = behaviors_df[behaviors_df["user_id"].isin(sampled_user_set)]
 
-        # Convert time to datetime
-        behaviors_df["time"] = pd.to_datetime(behaviors_df["time"])
+        if self.validation_split_strategy == "random":
+            logger.info(
+                f"Using random split for validation: {self.validation_split_percentage*100}% of training behaviors data, seed: {self.validation_split_seed}"
+            )
+            # Shuffle the DataFrame
+            shuffled_df = behaviors_df.sample(frac=1, random_state=self.validation_split_seed).reset_index(drop=True)
+            
+            # Split into new train and validation sets
+            val_size = int(len(shuffled_df) * self.validation_split_percentage)
+            val_behaviors = shuffled_df.iloc[:val_size]
+            train_behaviors = shuffled_df.iloc[val_size:]
+            logger.info(f"Random split: Train size: {len(train_behaviors)}, Validation size: {len(val_behaviors)}")
 
-        # Split into train and validation based on the last day
-        last_day = behaviors_df["time"].max().date()
-        train_behaviors = behaviors_df[behaviors_df["time"].dt.date < last_day]
-        val_behaviors = behaviors_df[behaviors_df["time"].dt.date == last_day]
+        elif self.validation_split_strategy == "chronological":
+            logger.info("Using chronological split for validation (last day of training behaviors data).")
+            # Convert time to datetime
+            behaviors_df["time"] = pd.to_datetime(behaviors_df["time"])
+            # Split into train and validation based on the last day
+            last_day = behaviors_df["time"].max().date()
+            train_behaviors = behaviors_df[behaviors_df["time"].dt.date < last_day]
+            val_behaviors = behaviors_df[behaviors_df["time"].dt.date == last_day]
+        else:
+            raise ValueError(f"Unknown validation_split_strategy: {self.validation_split_strategy}")
 
         logger.info(f"Train behaviors: {len(train_behaviors):,}")
 

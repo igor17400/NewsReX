@@ -8,7 +8,6 @@ from tensorflow.keras.layers import (
     MultiHeadAttention,
     Softmax,
     TimeDistributed,
-    Dot,
 )
 
 # from models.base import BaseNewsRecommender #TODO: add an abstract base class
@@ -77,9 +76,7 @@ class NewsEncoder(Layer):
         attention_weights = self.attention_softmax(attention_score)
 
         # Weighted sum to get final news vector
-        news_vector = tf.reduce_sum(title_repr * attention_weights, axis=1)
-
-        return news_vector
+        return tf.reduce_sum(title_repr * attention_weights, axis=1)
 
 
 class UserEncoder(Layer):
@@ -136,9 +133,7 @@ class UserEncoder(Layer):
         attention_weights = self.attention_softmax(attention_score)
 
         # Weighted sum to get final user vector
-        user_vector = tf.reduce_sum(click_repr * attention_weights, axis=1)
-
-        return user_vector
+        return tf.reduce_sum(click_repr * attention_weights, axis=1)
 
 
 class NRMS(tf.keras.Model):
@@ -229,7 +224,7 @@ class NRMS(tf.keras.Model):
         candidate_embeds = embedding_layer(candidate_input)
         candidate_news_vec = TimeDistributed(news_encoder)(candidate_embeds)
 
-        # Use dot product and softmax for training
+        # Use dot product and softmax for training multiple candidates
         dot_product = tf.keras.layers.Dot(axes=-1)([candidate_news_vec, user_vec])
         pred_scores = tf.keras.layers.Activation("softmax")(dot_product)
 
@@ -237,7 +232,7 @@ class NRMS(tf.keras.Model):
         candidate_one_embeds = embedding_layer(candidate_one_instance_reshape)
         candidate_one_vec = news_encoder(candidate_one_embeds)
 
-        # Use dot product and sigmoid for scoring
+        # Use dot product and sigmoid for scoring single candidate
         dot_product_one = tf.keras.layers.Dot(axes=-1)([candidate_one_vec, user_vec])
         pred_one_score = tf.keras.layers.Activation("sigmoid")(dot_product_one)
 
@@ -264,23 +259,23 @@ class NRMS(tf.keras.Model):
         if training:
             adapted_inputs["candidate_input"] = inputs["cand_tokens"]
             return self.model(adapted_inputs)
-        else:
-            # For validation/testing, reshape the candidates to process them all at once
-            # Shape of cand_tokens: (batch=1, num_candidates, seq_length)
-            _, num_candidates, seq_length = inputs["cand_tokens"].shape
-            
-            # Reshape candidates to (num_candidates, 1, seq_length)
-            reshaped_candidates = tf.reshape(inputs["cand_tokens"], [num_candidates, 1, seq_length])
-            
-            # Repeat history for each candidate
-            repeated_history = tf.repeat(inputs["hist_tokens"], repeats=num_candidates, axis=0)
-            
-            # Process all candidates at once
-            adapted_inputs["history_input"] = repeated_history
-            adapted_inputs["candidate_input_one_instance"] = reshaped_candidates
-            scores = self.scorer(adapted_inputs)
-            
-            # Reshape scores to (1, num_candidates) to match expected output shape
-            scores = tf.reshape(scores, [1, num_candidates])
-            
-            return scores
+
+        # For validation/testing, reshape the candidates to process them all at once
+        # Shape of cand_tokens: (batch=1, num_candidates, seq_length)
+        _, num_candidates, seq_length = inputs["cand_tokens"].shape
+
+        # Reshape candidates to (num_candidates, 1, seq_length)
+        reshaped_candidates = tf.reshape(inputs["cand_tokens"], [num_candidates, 1, seq_length])
+
+        # Repeat history for each candidate
+        repeated_history = tf.repeat(inputs["hist_tokens"], repeats=num_candidates, axis=0)
+
+        # Process all candidates at once
+        adapted_inputs["history_input"] = repeated_history
+        adapted_inputs["candidate_input_one_instance"] = reshaped_candidates
+        scores = self.scorer(adapted_inputs)
+
+        # Reshape scores to (1, num_candidates) to match expected output shape
+        scores = tf.reshape(scores, [1, num_candidates])
+
+        return scores

@@ -2,10 +2,14 @@ _target_: src.datasets.mind.MINDDataset
 
 # Dataset configuration
 name: "MIND"
-version: "small"  # Options: small, large
-embedding_type: "glove"  # Options: glove, bert
-embedding_size: 300  # Size of the embeddings
+version: "small" # Options: small, large
+embedding_type: "glove" # Options: glove, bert
+embedding_size: 300 # Size of the embeddings
 random_seed: 42
+random_train_samples: false
+validation_split_strategy: "random" # Options: chronological, random
+validation_split_percentage: 0.05
+validation_split_seed: 42
 
 # Dataset URLs
 urls:
@@ -24,7 +28,7 @@ max_history_length: 50
 max_impressions_length: 5
 
 # Knowledge graph configuration
-use_knowledge_graph: false  # Enable/disable knowledge graph processing
+use_knowledge_graph: false # Enable/disable knowledge graph processing
 
 # Pass sampling configuration directly
 sampling: ${sampling}
