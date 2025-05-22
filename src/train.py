@@ -108,7 +108,7 @@ def validate(model, dataloader, metrics, num_impressions, progress, mode="valida
 
     # Initialize metrics
     val_loss = 0
-    metric_values = {"auc": [], "mrr": [], "ndcg@5": [], "ndcg@10": [], "group_auc": []}
+    metric_values = {"auc": [], "mrr": [], "ndcg@5": [], "ndcg@10": []}  
     num_processed = 0
 
     # Process each impression
@@ -202,7 +202,6 @@ def train(cfg: DictConfig) -> None:
         "epoch": 0,
         "loss": float("inf"),  # Initialize with infinity (for training loss)
         "auc": 0.0,
-        "group_auc": 0.0,
         "mrr": 0.0,
         "ndcg@5": 0.0,
         "ndcg@10": 0.0,
@@ -221,7 +220,6 @@ def train(cfg: DictConfig) -> None:
         "train/loss": [],
         "val/loss": [],
         "val/auc": [],
-        "val/group_auc": [],
         "val/mrr": [],
         "val/ndcg@5": [],
         "val/ndcg@10": [],
@@ -308,7 +306,7 @@ def train(cfg: DictConfig) -> None:
 
                 # Add validation metrics with proper prefixes
                 for metric_name, value in val_metrics.items():
-                    if metric_name in ["loss", "auc", "group_auc", "mrr", "ndcg@5", "ndcg@10"]:
+                    if metric_name in ["loss", "auc", "mrr", "ndcg@5", "ndcg@10"]:
                         wandb_metrics[f"val/{metric_name}"] = value
 
                 # Log to wandb

@@ -20,7 +20,7 @@ dataset:
   max_title_length: 32
   max_history_length: 50
   use_knowledge_graph: false # Enable/disable knowledge graph processing
-  random_train_samples: true
+  random_train_samples: false
   validation_split_strategy: "random" # Options: chronological, random
 
 # Model specific
