@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional
 
 import numpy as np
 import requests
@@ -45,49 +45,26 @@ class EmbeddingsManager:
 
         # Check if txt file exists, if not download
         if not txt_file.exists():
-            # Download if not present
-            url = f"https://nlp.stanford.edu/data/glove.840B.{dim}d.zip"
-            zip_path = path / f"glove.840B.{dim}d.zip"
-            path.mkdir(parents=True, exist_ok=True)
-
-            # Download the zip file
-            with Progress() as progress:
-                task = progress.add_task("Downloading GloVe...", total=None)
-                response = requests.get(url, stream=True)
-                total_size = int(response.headers.get("content-length", 0))
-                progress.update(task, total=total_size)
-
-                with open(zip_path, "wb") as f:
-                    for data in response.iter_content(chunk_size=4096):
-                        f.write(data)
-                        progress.advance(task, len(data))
-
-            # Extract the zip file
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(path)
-                logger.info(f"Extracted GloVe embeddings to {path}")
-            
-            # Clean up zip file
-            zip_path.unlink()
+            self._download_and_extract_glove_zip(path, dim, txt_file)
 
         # Load embeddings from txt file
         logger.info("Loading GloVe embeddings from txt file...")
         self.glove_embeddings = {}
-        
+
         with Progress() as progress:
             file_size = txt_file.stat().st_size
             task = progress.add_task("Loading embeddings...", total=file_size)
-            
-            with open(txt_file, 'r', encoding='utf-8') as f:
+
+            with open(txt_file, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
                         values = line.split()
                         # Join all elements except the last 300 as the word
-                        word = ''.join(values[:-dim])
+                        word = "".join(values[:-dim])
                         # Take last 300 elements as the embedding
-                        vector = np.asarray(values[-dim:], dtype='float32')
+                        vector = np.asarray(values[-dim:], dtype="float32")
                         self.glove_embeddings[word] = vector
-                        progress.advance(task, len(line.encode('utf-8')))
+                        progress.advance(task, len(line.encode("utf-8")))
                     except Exception as e:
                         logger.warning(f"Error processing line: {line[:50]}... Error: {str(e)}")
                         continue
@@ -99,44 +76,123 @@ class EmbeddingsManager:
         # Create embedding matrix
         self._create_embedding_matrix(dim)
 
+    def _download_and_extract_glove_zip(self, path, dim, txt_file) -> None:
+        """Downloads and extracts GloVe embeddings if the txt file doesn't exist."""
+        # Download if not present
+        url = f"https://nlp.stanford.edu/data/glove.840B.{dim}d.zip"
+        zip_path = path / f"glove.840B.{dim}d.zip"
+        path.mkdir(parents=True, exist_ok=True)
+
+        # Download the zip file
+        with Progress() as progress:
+            task = progress.add_task("Downloading GloVe...", total=None)
+            response = requests.get(url, stream=True)
+            total_size = int(response.headers.get("content-length", 0))
+            progress.update(task, total=total_size)
+
+            with open(zip_path, "wb") as f:
+                for data in response.iter_content(chunk_size=4096):
+                    f.write(data)
+                    progress.advance(task, len(data))
+
+        # Extract the zip file
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(path)
+            logger.info(f"Extracted GloVe embeddings to {path}")
+
+        # Clean up zip file
+        zip_path.unlink()
+
     def _create_embedding_matrix(self, dim: int) -> None:
-        """Create embedding matrix from loaded GloVe embeddings"""
+        """Create embedding matrix from loaded GloVe embeddings.
+
+        This matrix can be used as a pre-trained weight matrix for an embedding layer.
+        The 0-th row is reserved for padding. For other rows, the index `i`
+        corresponds to the GloVe vector of the word that was assigned index `i`
+        during the enumeration of `self.glove_embeddings.items()`.
+        The resulting `self.embedding_matrix` is a TensorFlow constant.
+
+        Args:
+            dim: The dimension of the GloVe embeddings.
+        """
         self.embedding_dim = dim
         self.vocab_size = len(self.glove_embeddings)
-        
+
         # Create embedding matrix
         self.embedding_matrix = np.zeros((self.vocab_size + 1, dim))  # +1 for padding
         for idx, (word, vector) in enumerate(self.glove_embeddings.items(), 1):
             self.embedding_matrix[idx] = vector
-            
+
         # Convert to TensorFlow constant
         self.embedding_matrix = tf.constant(self.embedding_matrix, dtype=tf.float32)
 
-    def create_filtered_embedding_matrix(self, vocab: Dict[str, int], dim: int = 300) -> np.ndarray:
-        """Create embedding matrix only for words in the provided vocabulary"""
-        logger.info("Creating filtered embedding matrix for vocabulary...")
-        
-        # Initialize matrix with random values for unknown words
-        matrix_size = len(vocab)
-        embedding_matrix = np.random.uniform(-0.25, 0.25, (matrix_size, dim))
-        
-        # Set zero vector for padding token
-        embedding_matrix[0] = np.zeros(dim)
-        
-        # Count how many words we found
-        found_words = 0
-        
-        for word, idx in vocab.items():
-            if word in self.glove_embeddings:
-                embedding_matrix[idx] = self.glove_embeddings[word]
-                found_words += 1
-        
-        logger.info(f"Found embeddings for {found_words}/{len(vocab)} words")
-        return tf.constant(embedding_matrix, dtype=tf.float32)
+    def get_glove_raw_data(
+        self, dim: int = 300
+    ) -> Tuple[Optional[tf.Tensor], Optional[Dict[str, int]]]:
+        """
+        Ensures GloVe embeddings are loaded and returns the raw GloVe vectors as a TF tensor
+        and a word-to-index map for that tensor.
+        The tensor contains all words from the loaded GloVe file.
 
-    def load_bert(self, model_name: str = "bert-base-uncased") -> None:
-        """Load BERT model and tokenizer"""
-        if self.bert_model is None:
-            logger.info(f"Loading BERT model: {model_name}")
-            self.bert_tokenizer = BertTokenizer.from_pretrained(model_name)
-            self.bert_model = TFBertModel.from_pretrained(model_name)
+        Args:
+            dim: The dimension of the GloVe embeddings.
+
+        Returns:
+            A tuple containing:
+            - A TF tensor of shape (vocab_size, dim) containing the GloVe embeddings.
+            - A dictionary mapping words to their indices in the embedding tensor.
+        """
+        if self.glove_embeddings is None:
+            self.load_glove(
+                dim
+            )  # This loads into self.glove_embeddings (dict) and calls _create_embedding_matrix
+
+        if self.glove_embeddings is None:  # Still None after trying to load
+            logger.error("GloVe embeddings could not be loaded.")
+            return None, None
+
+        logger.info("Creating GloVe tensor and word-to-index map...")
+        glove_words = list(self.glove_embeddings.keys())
+        glove_vectors_list = [self.glove_embeddings[word] for word in glove_words]
+
+        if not glove_vectors_list:
+            logger.error("No GloVe vectors found in self.glove_embeddings.")
+            return None, None
+
+        # Force the creation of this very large tensor on the CPU.
+        # This is a one-time setup step to get all raw GloVe vectors.
+        # Placing it on CPU prevents potential GPU OOM errors when TF tries to allocate it.
+        try:
+            with tf.device("/cpu:0"):
+                raw_glove_tensor = tf.constant(glove_vectors_list, dtype=tf.float32)
+        except Exception as e:
+            logger.error(f"Error converting GloVe vectors list to tensor: {e}")
+            # Fallback: try creating from individual tensors if there's a shape mismatch issue
+            try:
+                with tf.device("/cpu:0"):
+                    raw_glove_tensor = tf.stack([tf.constant(v, dtype=tf.float32) for v in glove_vectors_list])
+            except Exception as e_stack:
+                logger.error(f"Critical error: Could not create raw_glove_tensor: {e_stack}")
+                return None, None
+
+        word_to_idx_map = {word: i for i, word in enumerate(glove_words)}
+        logger.info("GloVe tensor and word-to-index map created successfully.")
+
+        return raw_glove_tensor, word_to_idx_map
+
+    # Alias the new method name to what process_news expects
+    def load_glove_embeddings_tf_and_vocab_map(
+        self, dim: int = 300
+    ) -> Tuple[Optional[tf.Tensor], Optional[Dict[str, int]]]:
+        """
+        Loads GloVe embeddings and returns them as a TF tensor and a word-to-index map.
+
+        Args:
+            dim: The dimension of the GloVe embeddings.
+
+        Returns:
+            A tuple containing:
+            - A TF tensor of shape (vocab_size, dim) containing the GloVe embeddings.
+            - A dictionary mapping words to their indices in the embedding tensor.
+        """
+        return self.get_glove_raw_data(dim)

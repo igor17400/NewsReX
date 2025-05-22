@@ -200,12 +200,13 @@ def train(cfg: DictConfig) -> None:
     # At the beginning of train function, initialize best_metrics with Python types
     best_metrics = {
         "epoch": 0,
-        "loss": float("inf"),  # Initialize with infinity
+        "loss": float("inf"),  # Initialize with infinity (for training loss)
         "auc": 0.0,
-        "group_auc": 0.0,  # Add group_auc
+        "group_auc": 0.0,
         "mrr": 0.0,
         "ndcg@5": 0.0,
         "ndcg@10": 0.0,
+        "val_avg_metric": 0.0,  # Initialize best average validation metric
     }
 
     # Training loop
@@ -326,19 +327,29 @@ def train(cfg: DictConfig) -> None:
             # Save last model after each epoch
             model.save_weights(last_model_path)
 
-            # Update best model if loss improved
-            if epoch_metrics["train/loss"] < best_metrics["loss"]:
-                best_metrics = {
-                    "epoch": epoch,
-                    "loss": float(epoch_metrics["train/loss"]),
-                    **{k: float(v) for k, v in val_metrics.items()},
-                }
+            # Calculate the average of specified validation metrics
+            current_val_auc = float(val_metrics.get("auc", 0.0))
+            current_val_mrr = float(val_metrics.get("mrr", 0.0))
+            current_val_ndcg5 = float(val_metrics.get("ndcg@5", 0.0))
+            current_val_ndcg10 = float(val_metrics.get("ndcg@10", 0.0))
+            current_val_avg_metric = (current_val_auc + current_val_mrr + current_val_ndcg5 + current_val_ndcg10) / 4.0
+
+            # Update best model if average validation metric improved
+            if current_val_avg_metric > best_metrics["val_avg_metric"]:
+                best_metrics["epoch"] = epoch
+                best_metrics["loss"] = float(epoch_metrics['train/loss']) # Still log training loss
+                best_metrics["auc"] = current_val_auc
+                best_metrics["mrr"] = current_val_mrr
+                best_metrics["ndcg@5"] = current_val_ndcg5
+                best_metrics["ndcg@10"] = current_val_ndcg10
+                best_metrics["val_avg_metric"] = current_val_avg_metric
+                
                 patience_counter = 0
 
                 # Save best model
                 model.save_weights(best_model_path)
                 console.log(
-                    f"Saved best model at epoch {epoch} with loss: {epoch_metrics['train/loss']:.4f}"
+                    f"Saved best model at epoch {epoch} with avg val_metric: {current_val_avg_metric:.4f} (mrr: {current_val_mrr:.4f}, train loss: {epoch_metrics['train/loss']:.4f})"
                 )
             else:
                 patience_counter += 1
@@ -393,7 +404,9 @@ def train(cfg: DictConfig) -> None:
                 wandb.run.summary.update(
                     {
                         "best_val/epoch": best_metrics["epoch"],
-                        **{f"best_val/{k}": v for k, v in best_metrics.items() if k != "epoch"},
+                        "best_val/avg_metric": best_metrics["val_avg_metric"], # Log the best average metric
+                        **{f"best_val/{k}": v for k, v in best_metrics.items() if k not in ["epoch", "val_avg_metric", "loss"]}, # Log other best metrics
+                        "best_val/train_loss_at_best_avg": best_metrics["loss"] # Log training loss at the point of best avg val metric
                     }
                 )
 

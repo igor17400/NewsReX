@@ -13,7 +13,7 @@ def display_statistics(data_dict: Dict[str, Dict], mode: str = "train") -> None:
     logger.info("Displaying dataset statistics...")
 
     if mode == "train":
-        num_news = len(data_dict["news"]["news_ids"])
+        num_news = len(data_dict["news"]["news_ids_original_strings"])
         num_train_behaviors = len(data_dict["train_behaviors"]["histories_news_ids"])
         num_val_behaviors = len(data_dict["val_behaviors"]["histories_news_ids"])
 
@@ -26,7 +26,10 @@ def display_statistics(data_dict: Dict[str, Dict], mode: str = "train") -> None:
             [len(history) for history in data_dict["train_behaviors"]["history_news_tokens"]]
         )
         avg_impressions_length = np.mean(
-            [len(impression) for impression in data_dict["train_behaviors"]["candidate_news_tokens"]]
+            [
+                len(impression)
+                for impression in data_dict["train_behaviors"]["candidate_news_tokens"]
+            ]
         )
         avg_history_length_val = np.mean(
             [len(history) for history in data_dict["val_behaviors"]["history_news_tokens"]]
@@ -40,7 +43,7 @@ def display_statistics(data_dict: Dict[str, Dict], mode: str = "train") -> None:
         logger.info(f"Average history length (validation): {avg_history_length_val:.2f}")
         logger.info(f"Average impressions length (validation): {avg_impressions_length_val:.2f}")
     else:
-        num_test_news = len(data_dict["news"]["news_ids"])
+        num_test_news = len(data_dict["news"]["news_ids_original_strings"])
         num_test_behaviors = len(data_dict["test_behaviors"]["histories_news_ids"])
 
         logger.info(f"Number of news articles: {num_test_news}")
@@ -71,3 +74,11 @@ def apply_data_fraction(data_dict: Dict[str, np.ndarray], fraction: float) -> Di
         logger.info(f"Using {fraction * 100:.0f}% of the dataset")
         return {k: v[: int(len(v) * fraction)] for k, v in data_dict.items()}
     return data_dict
+
+
+def string_is_number(s: str) -> bool:
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False

@@ -17,10 +17,10 @@ description: "NRMS model trained on MIND-small dataset"
 dataset:
   name: "mind"
   version: "small"
-  max_title_length: 30
+  max_title_length: 32
   max_history_length: 50
   use_knowledge_graph: false # Enable/disable knowledge graph processing
-  random_train_samples: false
+  random_train_samples: true
   validation_split_strategy: "random" # Options: chronological, random
 
 # Model specific
@@ -37,7 +37,7 @@ train:
   batch_size: 64
   num_epochs: 5
   learning_rate: 0.0001
-  early_stopping_patience: 5
+  early_stopping_patience: 4
 
 # Logging
 logging:
