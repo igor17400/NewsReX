@@ -9,7 +9,7 @@ retrieve_candidate_articles:
   description: >
     Use the Exa tool to search for approximately 15 news articles published before the publication date ({publication_date}) that are topically or contextually related to the provided list of topics, entities, and keywords. DO NOT summarize, reformat, or interpret the results.  Just return the raw output from the Exa tool as-is.
   expected_output: >
-    The raw JSON output from the Exa tool, containing all articles and their metadata.
+    The verbatim, raw JSON output directly from the Exa tool. Your entire response MUST be ONLY this JSON data. It must start with `[` or `{` and end with `]` or `}`. Do not include any other text, explanations, introductions, or conversational elements before or after the JSON data. Any deviation from this format is strictly prohibited and will be considered an error.
   agent: news_retriever
 
 filter_and_rank_articles:

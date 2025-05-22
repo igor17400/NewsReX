@@ -1,6 +1,5 @@
 from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
-from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List
 from pathlib import Path
 from personalized_narratives.tools.exa_search_tool import ExaSearchTool
@@ -14,7 +13,7 @@ from personalized_narratives.tools.exa_search_tool import ExaSearchTool
 class PersonalizedNarratives:
     """PersonalizedNarratives crew"""
 
-    agents: List[BaseAgent]
+    agents: List[Agent]
     tasks: List[Task]
     article_output_path: Path
 
@@ -24,6 +23,7 @@ class PersonalizedNarratives:
         # Ensure the base for task outputs exists (e.g., output/news_N123/outputs/)
         # The tasks will write into this directory.
         (self.article_output_path / "outputs").mkdir(parents=True, exist_ok=True)
+        print("INFO: PersonalizedNarratives crew initialized. LLM will be determined by CrewAI defaults (e.g., OpenAI environment variables).")
 
     # Learn more about YAML configuration files here:
     # Agents: https://docs.crewai.com/concepts/agents#yaml-configuration-recommended
@@ -101,21 +101,22 @@ class PersonalizedNarratives:
         # To learn how to add knowledge sources to your crew, check out the documentation:
         # https://docs.crewai.com/concepts/knowledge#what-is-knowledge
 
-        return Crew(
-            agents=[
+        crew_params = {
+            "agents": [
                 self.topic_extractor(),
                 self.news_retriever(),
                 self.relevance_filter(),
                 self.background_synthesizer(),
                 self.storytelling_news_composer(),
             ],
-            tasks=[
+            "tasks": [
                 self.extract_topics_entities(),
                 self.retrieve_candidate_articles(),
                 self.filter_and_rank_articles(),
                 self.synthesize_background(),
                 self.compose_storytelling_news(),
             ],
-            process=Process.sequential,
-            verbose=True,
-        )
+            "process": Process.sequential,
+            "verbose": True,
+        }
+        return Crew(**crew_params)
