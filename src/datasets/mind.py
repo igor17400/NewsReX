@@ -637,8 +637,7 @@ class MINDDataset(BaseNewsDataset):
         self.dataset_path.mkdir(parents=True, exist_ok=True)
 
         # Get URLs from configuration based on version
-        urls = self.urls[self.version]
-        if not urls:
+        if not self.urls:
             raise ValueError(f"No URLs found in configuration for version: {self.version}")
 
         with Progress(
@@ -649,7 +648,7 @@ class MINDDataset(BaseNewsDataset):
             TimeRemainingColumn(),
             console=console,
         ) as progress:
-            for split, url in urls.items():
+            for split, url in self.urls.items():
                 zip_path = self.dataset_path / f"{split}.zip"
                 extract_path = self.dataset_path / split
 
