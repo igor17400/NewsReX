@@ -20,14 +20,14 @@ dataset:
   max_title_length: 32
   max_history_length: 50
   use_knowledge_graph: false # Enable/disable knowledge graph processing
-  random_train_samples: false
+  random_train_samples: true
   validation_split_strategy: "random" # Options: chronological, random
 
 # Model specific
 model:
   embedding_size: 300
   multiheads: 20
-  head_dim: 20
+  head_dim: 32
   attention_hidden_dim: 200
   dropout_rate: 0.2
   seed: 42
