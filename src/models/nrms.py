@@ -2,19 +2,18 @@ from typing import Any, Dict
 
 import tensorflow as tf
 from tensorflow.keras.layers import (
-    Dense,
     Dropout,
     Layer,
     MultiHeadAttention,
-    Softmax,
     TimeDistributed,
 )
+from .layers import AdditiveSelfAttention
 
 # from models.base import BaseNewsRecommender #TODO: add an abstract base class
 
 
 class NewsEncoder(Layer):
-    """News encoder with multi-head self-attention."""
+    """News encoder with multi-head self-attention followed by additive attention."""
 
     def __init__(
         self,
@@ -34,23 +33,14 @@ class NewsEncoder(Layer):
 
     def build(self, input_shape: tf.TensorShape) -> None:
         """Build the layer."""
-        # Multi-head self attention
         self.multihead_attention = MultiHeadAttention(
             num_heads=self.multiheads, key_dim=self.head_dim, seed=self.seed
         )
-
-        # Additive attention for final news representation
-        self.attention_dense = Dense(
-            self.attention_hidden_dim,
-            activation="tanh",
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
-        )
-        self.attention_query = Dense(
-            1, kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed)
-        )
-        self.attention_softmax = Softmax(axis=1)
         self.dropout = Dropout(self.dropout_rate, seed=self.seed)
 
+        self.additive_attention = AdditiveSelfAttention(
+            query_vector_dim=self.attention_hidden_dim, dropout=self.dropout_rate
+        )
         super().build(input_shape)
 
     def compute_output_shape(self, input_shape):
@@ -71,16 +61,11 @@ class NewsEncoder(Layer):
         title_repr = self.dropout(title_repr, training=training)
 
         # Additive attention
-        attention_hidden = self.attention_dense(title_repr)
-        attention_score = self.attention_query(attention_hidden)
-        attention_weights = self.attention_softmax(attention_score)
-
-        # Weighted sum to get final news vector
-        return tf.reduce_sum(title_repr * attention_weights, axis=1)
+        return self.additive_attention(title_repr, training=training)
 
 
 class UserEncoder(Layer):
-    """User encoder with multi-head self-attention."""
+    """User encoder with multi-head self-attention followed by additive attention."""
 
     def __init__(
         self,
@@ -88,6 +73,7 @@ class UserEncoder(Layer):
         head_dim: int,
         attention_hidden_dim: int,
         seed: int = 0,
+        dropout_rate: float = 0.0,
         **kwargs: Any,
     ) -> None:
         super(UserEncoder, self).__init__(**kwargs)
@@ -95,6 +81,7 @@ class UserEncoder(Layer):
         self.head_dim = head_dim
         self.attention_hidden_dim = attention_hidden_dim
         self.seed = seed
+        self.dropout_rate = dropout_rate
 
     def build(self, input_shape: tf.TensorShape) -> None:
         """Build the layer."""
@@ -104,16 +91,9 @@ class UserEncoder(Layer):
         )
 
         # Additive attention for final user representation
-        self.attention_dense = Dense(
-            self.attention_hidden_dim,
-            activation="tanh",
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+        self.additive_attention = AdditiveSelfAttention(
+            query_vector_dim=self.attention_hidden_dim, dropout=self.dropout_rate
         )
-        self.attention_query = Dense(
-            1, kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed)
-        )
-        self.attention_softmax = Softmax(axis=1)
-
         super().build(input_shape)
 
     def compute_output_shape(self, input_shape):
@@ -122,18 +102,13 @@ class UserEncoder(Layer):
         # Output shape: (batch_size, head_dim * multiheads)
         return (input_shape[0], self.head_dim * self.multiheads)
 
-    def call(self, news_vecs: tf.Tensor) -> tf.Tensor:
-        """Process news vectors from history."""
+    def call(self, news_vecs: tf.Tensor, training: bool = None) -> tf.Tensor:
+        """Process news vectors."""
         # Multi-head self attention
         click_repr = self.multihead_attention(query=news_vecs, key=news_vecs, value=news_vecs)
 
-        # Additive attention
-        attention_hidden = self.attention_dense(click_repr)
-        attention_score = self.attention_query(attention_hidden)
-        attention_weights = self.attention_softmax(attention_score)
-
-        # Weighted sum to get final user vector
-        return tf.reduce_sum(click_repr * attention_weights, axis=1)
+        # Additive attention for final user representation
+        return self.additive_attention(click_repr, training=training)
 
 
 class NRMS(tf.keras.Model):
