@@ -23,7 +23,7 @@ urls:
 
 # Preprocessing parameters
 max_title_length: 30
-max_abstract_length: 100
+max_abstract_length: 50
 max_history_length: 50
 max_impressions_length: 5
 

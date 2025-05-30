@@ -22,6 +22,8 @@ class EmbeddingsManager:
         self.embedding_dim = None
         self.bert_model = None
         self.bert_tokenizer = None
+        self.category_embeddings = None
+        self.subcategory_embeddings = None
 
     def load_glove(self, dim: int = 300) -> None:
         """Load GloVe embeddings and create embedding matrix"""
@@ -196,3 +198,49 @@ class EmbeddingsManager:
             - A dictionary mapping words to their indices in the embedding tensor.
         """
         return self.get_glove_raw_data(dim)
+
+    def create_category_embeddings(self, num_categories: int, embedding_dim: int = 100) -> tf.Tensor:
+        """Create trainable category embeddings.
+        
+        Args:
+            num_categories: Number of unique categories
+            embedding_dim: Dimension of category embeddings
+            
+        Returns:
+            TensorFlow tensor of shape (num_categories, embedding_dim)
+        """
+        # Initialize with random normal distribution
+        initializer = tf.keras.initializers.GlorotNormal()
+        self.category_embeddings = tf.Variable(
+            initializer(shape=(num_categories, embedding_dim)),
+            trainable=True,
+            name="category_embeddings"
+        )
+        return self.category_embeddings
+
+    def create_subcategory_embeddings(self, num_subcategories: int, embedding_dim: int = 100) -> tf.Tensor:
+        """Create trainable subcategory embeddings.
+        
+        Args:
+            num_subcategories: Number of unique subcategories
+            embedding_dim: Dimension of subcategory embeddings
+            
+        Returns:
+            TensorFlow tensor of shape (num_subcategories, embedding_dim)
+        """
+        # Initialize with random normal distribution
+        initializer = tf.keras.initializers.GlorotNormal()
+        self.subcategory_embeddings = tf.Variable(
+            initializer(shape=(num_subcategories, embedding_dim)),
+            trainable=True,
+            name="subcategory_embeddings"
+        )
+        return self.subcategory_embeddings
+
+    def get_category_embeddings(self) -> Optional[tf.Tensor]:
+        """Get category embeddings if they exist."""
+        return self.category_embeddings
+
+    def get_subcategory_embeddings(self) -> Optional[tf.Tensor]:
+        """Get subcategory embeddings if they exist."""
+        return self.subcategory_embeddings

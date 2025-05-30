@@ -27,10 +27,13 @@ dataset:
 model:
   embedding_size: 300
   multiheads: 20
-  head_dim: 32
+  head_dim: 20
   attention_hidden_dim: 200
   dropout_rate: 0.2
   seed: 42
+  loss:
+    name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
+    from_logits: false # Whether the model outputs logits or probabilities
 
 # Training parameters
 train:
@@ -41,7 +44,7 @@ train:
 
 # Logging
 logging:
-  enable_wandb: true
+  enable_wandb: false
   project_name: "BTC"
   experiment_name: nrms_mind_small
 

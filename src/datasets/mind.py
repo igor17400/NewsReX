@@ -238,6 +238,25 @@ class MINDDataset(BaseNewsDataset):
             }
             logger.info("News string ID to integer index mapping created...")
 
+            # Create category and subcategory mappings
+            logger.info("Creating category and subcategory mappings...")
+            unique_categories = sorted(all_news_df["category"].unique())
+            unique_subcategories = sorted(all_news_df["subcategory"].unique())
+            
+            self.category_to_idx = {cat: idx for idx, cat in enumerate(unique_categories)}
+            self.subcategory_to_idx = {subcat: idx for idx, subcat in enumerate(unique_subcategories)}
+            
+            logger.info(f"Found {len(unique_categories)} unique categories and {len(unique_subcategories)} unique subcategories")
+            
+            # Create category and subcategory arrays
+            category_indices = np.zeros(len(unique_news_ids_str), dtype=np.int32)
+            subcategory_indices = np.zeros(len(unique_news_ids_str), dtype=np.int32)
+            
+            for nid_str, cat, subcat in zip(all_news_df["id"], all_news_df["category"], all_news_df["subcategory"]):
+                int_idx = self.news_str_id_to_int_idx[nid_str]
+                category_indices[int_idx] = self.category_to_idx[cat]
+                subcategory_indices[int_idx] = self.subcategory_to_idx[subcat]
+
             logger.info("Building vocabulary from news titles...")
             word_counter = collections.Counter()
 
@@ -327,6 +346,9 @@ class MINDDataset(BaseNewsDataset):
             tokenized_titles_np = np.full(
                 (num_unique_news, self.max_title_length), self.vocab["[PAD]"], dtype=np.int32
             )
+            tokenized_abstracts_np = np.full(
+                (num_unique_news, self.max_abstract_length), self.vocab["[PAD]"], dtype=np.int32
+            )
 
             with Progress(
                 SpinnerColumn(),
@@ -336,13 +358,22 @@ class MINDDataset(BaseNewsDataset):
                 TimeRemainingColumn(),
                 console=console,
             ) as progress:
-                task = progress.add_task("Tokenizing all news titles...", total=len(all_news_df))
-                for nid_str, title_text in zip(all_news_df["id"], all_news_df["title"]):
+                task = progress.add_task("Tokenizing all news titles and abstracts...", total=len(all_news_df))
+                for nid_str, title_text, abstract_text in zip(all_news_df["id"], all_news_df["title"], all_news_df["abstract"]):
                     int_idx = self.news_str_id_to_int_idx[nid_str]
+                    # Tokenize title
                     tokenized_titles_np[int_idx] = self.tokenize_text(
                         str(title_text),  # Ensure text is string
                         self.vocab,
                         self.max_title_length,
+                        unk_token_id=self.vocab["[UNK]"],
+                        pad_token_id=self.vocab["[PAD]"],
+                    )
+                    # Tokenize abstract
+                    tokenized_abstracts_np[int_idx] = self.tokenize_text(
+                        str(abstract_text),  # Ensure text is string
+                        self.vocab,
+                        self.max_abstract_length,
                         unk_token_id=self.vocab["[UNK]"],
                         pad_token_id=self.vocab["[PAD]"],
                     )
@@ -429,7 +460,12 @@ class MINDDataset(BaseNewsDataset):
             processed_news_content = {
                 "news_ids_original_strings": unique_news_ids_str,  # Store the original string IDs
                 "tokens": tokenized_titles_np,
+                "abstract_tokens": tokenized_abstracts_np,
                 "vocab_size": len(self.vocab),
+                "category_indices": category_indices,
+                "subcategory_indices": subcategory_indices,
+                "num_categories": len(unique_categories),
+                "num_subcategories": len(unique_subcategories),
             }
 
             with open(processed_news_file, "wb") as f:
@@ -733,8 +769,14 @@ class MINDDataset(BaseNewsDataset):
             []
         )  # List of news IDs in the history of news articles clicked by the user
         history_news_tokens = []  # Tokens for each news article in the history
+        history_news_abstract_tokens = []  # Abstract tokens for each news article in the history
+        history_news_categories = []  # Categories for each news article in the history
+        history_news_subcategories = []  # Subcategories for each news article in the history
         candidate_news_ids = []  # Candidate news IDs for each impression row
         candidate_news_tokens = []  # Tokens for each candidate news article
+        candidate_news_abstract_tokens = []  # Abstract tokens for each candidate news article
+        candidate_news_categories = []  # Categories for each candidate news article
+        candidate_news_subcategories = []  # Subcategories for each candidate news article
         labels = []  # Labels for each candidate news article
         impression_ids = []  # IDs for each impression. That's the row in the behaviors.tsv file
 
@@ -752,6 +794,37 @@ class MINDDataset(BaseNewsDataset):
                     for nid in self.processed_news["news_ids_original_strings"]
                 ],
                 self.processed_news["tokens"],
+            )
+        )
+
+        # Create a lookup dictionary from news ID to pre-tokenized abstracts
+        news_abstract_tokens = dict(
+            zip(
+                [
+                    int(nid.split("N")[1])
+                    for nid in self.processed_news["news_ids_original_strings"]
+                ],
+                self.processed_news["abstract_tokens"],
+            )
+        )
+
+        # Create lookup dictionaries for categories and subcategories
+        news_categories = dict(
+            zip(
+                [
+                    int(nid.split("N")[1])
+                    for nid in self.processed_news["news_ids_original_strings"]
+                ],
+                self.processed_news["category_indices"],
+            )
+        )
+        news_subcategories = dict(
+            zip(
+                [
+                    int(nid.split("N")[1])
+                    for nid in self.processed_news["news_ids_original_strings"]
+                ],
+                self.processed_news["subcategory_indices"],
             )
         )
 
@@ -787,6 +860,9 @@ class MINDDataset(BaseNewsDataset):
                     int(h.split("N")[1]) for h in history
                 ]  # List of news IDs in the history clicked news clicked by the user
                 curr_history_tokens = [news_tokens[h_idx] for h_idx in history_nid_list]
+                curr_history_abstract_tokens = [news_abstract_tokens[h_idx] for h_idx in history_nid_list]
+                curr_history_categories = [news_categories[h_idx] for h_idx in history_nid_list]
+                curr_history_subcategories = [news_subcategories[h_idx] for h_idx in history_nid_list]
 
                 # -- Pad histories
                 history_pad_length = self.max_history_length - len(history)
@@ -794,6 +870,11 @@ class MINDDataset(BaseNewsDataset):
                 curr_history_tokens = [
                     [0] * self.max_title_length
                 ] * history_pad_length + curr_history_tokens
+                curr_history_abstract_tokens = [
+                    [0] * self.max_abstract_length
+                ] * history_pad_length + curr_history_abstract_tokens
+                curr_history_categories = [0] * history_pad_length + curr_history_categories
+                curr_history_subcategories = [0] * history_pad_length + curr_history_subcategories
 
                 # -- Process candidate news
                 # cand_nid_group_list: List of candidate news groups, where each group contains:
@@ -816,8 +897,14 @@ class MINDDataset(BaseNewsDataset):
                         # Repeat the same history for this group
                         histories_news_ids.append(history_nid_list)
                         history_news_tokens.append(curr_history_tokens)
+                        history_news_abstract_tokens.append(curr_history_abstract_tokens)
+                        history_news_categories.append(curr_history_categories)
+                        history_news_subcategories.append(curr_history_subcategories)
                         candidate_news_ids.append(cand_nid_group)
                         candidate_news_tokens.append([news_tokens[nid] for nid in cand_nid_group])
+                        candidate_news_abstract_tokens.append([news_abstract_tokens[nid] for nid in cand_nid_group])
+                        candidate_news_categories.append([news_categories[nid] for nid in cand_nid_group])
+                        candidate_news_subcategories.append([news_subcategories[nid] for nid in cand_nid_group])
                         labels.append(label_group)
                 else:
                     # -- For validation/testing, keep original impressions without padding
@@ -826,8 +913,14 @@ class MINDDataset(BaseNewsDataset):
                     # Store original impressions without padding
                     histories_news_ids.append(history_nid_list)
                     history_news_tokens.append(curr_history_tokens)
+                    history_news_abstract_tokens.append(curr_history_abstract_tokens)
+                    history_news_categories.append(curr_history_categories)
+                    history_news_subcategories.append(curr_history_subcategories)
                     candidate_news_ids.append(cand_nid_group)
                     candidate_news_tokens.append([news_tokens[nid] for nid in cand_nid_group])
+                    candidate_news_abstract_tokens.append([news_abstract_tokens[nid] for nid in cand_nid_group])
+                    candidate_news_categories.append([news_categories[nid] for nid in cand_nid_group])
+                    candidate_news_subcategories.append([news_subcategories[nid] for nid in cand_nid_group])
                     labels.append(label_group)
 
                 progress.advance(task)
@@ -837,8 +930,14 @@ class MINDDataset(BaseNewsDataset):
                 result = {
                     "histories_news_ids": np.array(histories_news_ids, dtype=np.int32),
                     "history_news_tokens": np.array(history_news_tokens, dtype=np.int32),
+                    "history_news_abstract_tokens": np.array(history_news_abstract_tokens, dtype=np.int32),
+                    "history_news_categories": np.array(history_news_categories, dtype=np.int32),
+                    "history_news_subcategories": np.array(history_news_subcategories, dtype=np.int32),
                     "candidate_news_ids": np.array(candidate_news_ids, dtype=np.int32),
                     "candidate_news_tokens": np.array(candidate_news_tokens, dtype=np.int32),
+                    "candidate_news_abstract_tokens": np.array(candidate_news_abstract_tokens, dtype=np.int32),
+                    "candidate_news_categories": np.array(candidate_news_categories, dtype=np.int32),
+                    "candidate_news_subcategories": np.array(candidate_news_subcategories, dtype=np.int32),
                     "labels": np.array(labels, dtype=np.float32),
                     "impression_ids": np.array(impression_ids, dtype=np.int32),
                 }
@@ -847,8 +946,14 @@ class MINDDataset(BaseNewsDataset):
                 result = {
                     "histories_news_ids": histories_news_ids,
                     "history_news_tokens": history_news_tokens,
+                    "history_news_abstract_tokens": history_news_abstract_tokens,
+                    "history_news_categories": history_news_categories,
+                    "history_news_subcategories": history_news_subcategories,
                     "candidate_news_ids": candidate_news_ids,
                     "candidate_news_tokens": candidate_news_tokens,
+                    "candidate_news_abstract_tokens": candidate_news_abstract_tokens,
+                    "candidate_news_categories": candidate_news_categories,
+                    "candidate_news_subcategories": candidate_news_subcategories,
                     "labels": labels,
                     "impression_ids": impression_ids,
                 }

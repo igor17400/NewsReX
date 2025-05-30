@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import tensorflow as tf
 from tensorflow.keras.layers import (
@@ -8,12 +8,26 @@ from tensorflow.keras.layers import (
     TimeDistributed,
 )
 from .layers import AdditiveSelfAttention
+from .base import BaseNewsRecommender
 
 # from models.base import BaseNewsRecommender #TODO: add an abstract base class
 
 
 class NewsEncoder(Layer):
-    """News encoder with multi-head self-attention followed by additive attention."""
+    """
+    Encodes news titles into fixed-length vector representations.
+
+    The encoder processes sequences of word embeddings through:
+    1. Multi-head self-attention to capture contextual relationships between words
+    2. Additive attention to select the most informative words
+
+    Args:
+        multiheads: Number of attention heads
+        head_dim: Dimension of each attention head
+        attention_hidden_dim: Dimension of attention query vector
+        dropout_rate: Dropout rate
+        seed: Random seed for reproducibility
+    """
 
     def __init__(
         self,
@@ -24,7 +38,7 @@ class NewsEncoder(Layer):
         seed: int = 0,
         **kwargs: Any,
     ) -> None:
-        super(NewsEncoder, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.multiheads = multiheads
         self.head_dim = head_dim
         self.attention_hidden_dim = attention_hidden_dim
@@ -34,20 +48,22 @@ class NewsEncoder(Layer):
     def build(self, input_shape: tf.TensorShape) -> None:
         """Build the layer."""
         self.multihead_attention = MultiHeadAttention(
-            num_heads=self.multiheads, key_dim=self.head_dim, seed=self.seed
+            num_heads=self.multiheads,
+            key_dim=self.head_dim,
+            seed=self.seed,
+            name="news_multihead_attention",
         )
-        self.dropout = Dropout(self.dropout_rate, seed=self.seed)
-
+        self.dropout = Dropout(
+            self.dropout_rate,
+            seed=self.seed,
+            name="news_dropout",
+        )
         self.additive_attention = AdditiveSelfAttention(
-            query_vector_dim=self.attention_hidden_dim, dropout=self.dropout_rate
+            query_vector_dim=self.attention_hidden_dim,
+            dropout=self.dropout_rate,
+            name="news_additive_attention",
         )
         super().build(input_shape)
-
-    def compute_output_shape(self, input_shape):
-        """Compute output shape."""
-        # Input shape: (batch_size, seq_length, embedding_dim)
-        # Output shape: (batch_size, head_dim * multiheads)
-        return (input_shape[0], self.head_dim * self.multiheads)
 
     def call(self, inputs: tf.Tensor, training: bool = None) -> tf.Tensor:
         """Process title embeddings."""
@@ -55,7 +71,12 @@ class NewsEncoder(Layer):
         title_repr = self.dropout(inputs, training=training)
 
         # Multi-head self attention
-        title_repr = self.multihead_attention(query=title_repr, key=title_repr, value=title_repr)
+        title_repr = self.multihead_attention(
+            query=title_repr,
+            key=title_repr,
+            value=title_repr,
+            training=training,
+        )
 
         # Apply dropout after attention
         title_repr = self.dropout(title_repr, training=training)
@@ -63,9 +84,33 @@ class NewsEncoder(Layer):
         # Additive attention
         return self.additive_attention(title_repr, training=training)
 
+    def compute_output_shape(self, input_shape: tf.TensorShape) -> tf.TensorShape:
+        """Compute the output shape of the layer.
+
+        Args:
+            input_shape: Shape of the input tensor (batch_size, seq_length, embedding_dim)
+
+        Returns:
+            Shape of the output tensor (batch_size, embedding_dim)
+        """
+        return tf.TensorShape([input_shape[0], self.head_dim * self.multiheads])
+
 
 class UserEncoder(Layer):
-    """User encoder with multi-head self-attention followed by additive attention."""
+    """
+    Encodes a user's history of browsed news into a single vector representation.
+
+    The encoder processes a sequence of news vectors through:
+    1. Multi-head self-attention to capture contextual relationships between news articles
+    2. Additive attention to select the most relevant news articles
+
+    Args:
+        multiheads: Number of attention heads
+        head_dim: Dimension of each attention head
+        attention_hidden_dim: Dimension of attention query vector
+        seed: Random seed for reproducibility
+        dropout_rate: Dropout rate
+    """
 
     def __init__(
         self,
@@ -76,7 +121,7 @@ class UserEncoder(Layer):
         dropout_rate: float = 0.0,
         **kwargs: Any,
     ) -> None:
-        super(UserEncoder, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.multiheads = multiheads
         self.head_dim = head_dim
         self.attention_hidden_dim = attention_hidden_dim
@@ -85,33 +130,62 @@ class UserEncoder(Layer):
 
     def build(self, input_shape: tf.TensorShape) -> None:
         """Build the layer."""
-        # Multi-head self attention
         self.multihead_attention = MultiHeadAttention(
-            num_heads=self.multiheads, key_dim=self.head_dim, seed=self.seed
+            num_heads=self.multiheads,
+            key_dim=self.head_dim,
+            seed=self.seed,
+            name="user_multihead_attention",
         )
-
-        # Additive attention for final user representation
         self.additive_attention = AdditiveSelfAttention(
-            query_vector_dim=self.attention_hidden_dim, dropout=self.dropout_rate
+            query_vector_dim=self.attention_hidden_dim,
+            dropout=self.dropout_rate,
+            name="user_additive_attention",
         )
         super().build(input_shape)
-
-    def compute_output_shape(self, input_shape):
-        """Compute output shape."""
-        # Input shape: (batch_size, history_length, news_vector_dim)
-        # Output shape: (batch_size, head_dim * multiheads)
-        return (input_shape[0], self.head_dim * self.multiheads)
 
     def call(self, news_vecs: tf.Tensor, training: bool = None) -> tf.Tensor:
         """Process news vectors."""
         # Multi-head self attention
-        click_repr = self.multihead_attention(query=news_vecs, key=news_vecs, value=news_vecs)
+        click_repr = self.multihead_attention(
+            query=news_vecs,
+            key=news_vecs,
+            value=news_vecs,
+            training=training,
+        )
 
         # Additive attention for final user representation
         return self.additive_attention(click_repr, training=training)
 
+    def compute_output_shape(self, input_shape: tf.TensorShape) -> tf.TensorShape:
+        """Compute the output shape of the layer.
 
-class NRMS(tf.keras.Model):
+        Args:
+            input_shape: Shape of the input tensor (batch_size, seq_length, embedding_dim)
+
+        Returns:
+            Shape of the output tensor (batch_size, embedding_dim)
+        """
+        return tf.TensorShape([input_shape[0], self.head_dim * self.multiheads])
+
+
+class NRMS(BaseNewsRecommender):
+    """Neural News Recommendation with Multi-Head Self-Attention (NRMS) model.
+
+    NRMS processes news articles through:
+    1. NewsEncoder: Processes news titles using multi-head attention
+    2. UserEncoder: Processes user's click history using multi-head attention
+    3. Click prediction using dot product and softmax/sigmoid activation
+
+    Args:
+        processed_news: Dictionary containing processed news data
+        embedding_size: Dimension of word embeddings
+        multiheads: Number of attention heads
+        head_dim: Dimension of each attention head
+        attention_hidden_dim: Dimension of attention query vector
+        dropout_rate: Dropout rate
+        seed: Random seed for reproducibility
+    """
+
     def __init__(
         self,
         processed_news: Dict[str, Any],
@@ -121,8 +195,19 @@ class NRMS(tf.keras.Model):
         attention_hidden_dim: int = 200,
         dropout_rate: float = 0.2,
         seed: int = 42,
-    ):
-        super().__init__()
+        name: str = "nrms",
+        loss: Dict[str, Any] = None,
+        **kwargs: Any,
+    ) -> None:
+        if not loss:
+            raise ValueError(
+                "Loss configuration is required. Please specify loss parameters in the config file."
+            )
+
+        loss_name = loss["name"]  # Required field
+        loss_kwargs = {k: v for k, v in loss.items() if k != "name"}
+
+        super().__init__(name=name, loss=loss_name, loss_kwargs=loss_kwargs, **kwargs)
         self.embedding_size = embedding_size
         self.multiheads = multiheads
         self.head_dim = head_dim
@@ -133,9 +218,9 @@ class NRMS(tf.keras.Model):
         self.embeddings = processed_news["embeddings"]
 
         # Build both models
-        self.model, self.scorer = self._build_nrms()
+        self.model, self.scorer = self._build_model()
 
-    def _build_nrms(self):
+    def _build_model(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
         """Build both the training model and the scorer model."""
         # Create input layers
         history_input = tf.keras.Input(
@@ -152,13 +237,10 @@ class NRMS(tf.keras.Model):
         )
 
         # Input for scoring (single candidate)
-        candidate_input_one_instance = tf.keras.Input(
-            shape=(1, None), dtype="int32", name="candidate_input_one_instance"  # (1, title_length)
-        )
-
-        # Reshape single candidate input
-        candidate_one_instance_reshape = tf.keras.layers.Reshape((-1,))(
-            candidate_input_one_instance
+        candidate_one_input = tf.keras.Input(
+            shape=(1, None),  # (1, title_length)
+            dtype="int32",
+            name="candidate_input_one_instance",
         )
 
         # Create embedding layer
@@ -181,7 +263,6 @@ class NRMS(tf.keras.Model):
             name="news_encoder",
         )
 
-        # Create user encoder that uses the news encoder
         user_encoder = UserEncoder(
             multiheads=self.multiheads,
             head_dim=self.head_dim,
@@ -204,7 +285,9 @@ class NRMS(tf.keras.Model):
         pred_scores = tf.keras.layers.Activation("softmax")(dot_product)
 
         # Scorer model: process single candidate
-        candidate_one_embeds = embedding_layer(candidate_one_instance_reshape)
+        # Reshape single candidate to remove batch dimension
+        candidate_one_reshape = tf.keras.layers.Reshape((-1,))(candidate_one_input)
+        candidate_one_embeds = embedding_layer(candidate_one_reshape)
         candidate_one_vec = news_encoder(candidate_one_embeds)
 
         # Use dot product and sigmoid for scoring single candidate
@@ -213,18 +296,20 @@ class NRMS(tf.keras.Model):
 
         # Create models
         model = tf.keras.Model(
-            inputs=[history_input, candidate_input], outputs=pred_scores, name="nrms_model"
+            inputs=[history_input, candidate_input],
+            outputs=pred_scores,
+            name="nrms_model",
         )
 
         scorer = tf.keras.Model(
-            inputs=[history_input, candidate_input_one_instance],
+            inputs=[history_input, candidate_one_input],
             outputs=pred_one_score,
             name="nrms_scorer",
         )
 
         return model, scorer
 
-    def call(self, inputs, training=True):
+    def call(self, inputs: Dict[str, tf.Tensor], training: bool = True) -> tf.Tensor:
         """Forward pass using the appropriate model."""
         # Adapt input keys to match model expectations
         adapted_inputs = {
@@ -251,6 +336,4 @@ class NRMS(tf.keras.Model):
         scores = self.scorer(adapted_inputs)
 
         # Reshape scores to (1, num_candidates) to match expected output shape
-        scores = tf.reshape(scores, [1, num_candidates])
-
-        return scores
+        return tf.reshape(scores, [1, num_candidates])
