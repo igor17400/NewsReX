@@ -870,8 +870,6 @@ class MINDDataset(BaseNewsDataset):
 
             # Parse all behavior rows
             for _, row in behaviors_df.iterrows():
-                impression_ids.append(row["impression_id"])
-
                 # Count positives in this row
                 impressions = row["impressions"].split()
                 positives_count = sum(imp.split("-")[1] == "1" for imp in impressions)
@@ -969,6 +967,7 @@ class MINDDataset(BaseNewsDataset):
                         [news_subcategories[nid] for nid in cand_nid_group]
                     )
                     labels.append(label_group)
+                    impression_ids.append(row["impression_id"])
 
                 progress.advance(task)
 
