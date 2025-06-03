@@ -438,12 +438,11 @@ def train_epoch_fn(
     )
 
     for batch_count, data_batch in enumerate(dataloader_train, 1):
-        # train_step_fn returns dict of current batch metrics {metric_name: value, "loss": batch_loss}
         batch_step_metrics = train_step_fn(model, data_batch)
         current_batch_loss = float(batch_step_metrics["loss"])
         sum_batch_losses += current_batch_loss
 
-        # Update progress bar description with current batch loss
+        # Only update progress bar and log batch loss
         progress_bar.update(
             epoch_train_task,
             advance=1,
@@ -451,41 +450,16 @@ def train_epoch_fn(
         )
 
         if batch_count % log_interval_steps == 0:
-            # Log running average of Keras compiled metrics
-            compiled_metrics_str = ", ".join(
-                [
-                    (
-                        f"{m.name}: {float(m.result()):.4f}"
-                        if not isinstance(m.result(), dict)
-                        else f"{m.name}: {float(m.result().get('total', 0)):.4f}"
-                    )
-                    for m in model.metrics
-                ]
-            )
             console.log(
-                f"Epoch {epoch_idx+1}, Batch {batch_count}/{num_batches_epoch}, Batch Loss: {current_batch_loss:.4f}. Running Avg Metrics: [{compiled_metrics_str}]"
+                f"Epoch {epoch_idx+1}, Batch {batch_count}/{num_batches_epoch}, "
+                f"Batch Loss: {current_batch_loss:.4f}."
             )
 
     progress_bar.remove_task(epoch_train_task)
 
-    # Final epoch metrics: average loss and final state of Keras compiled metrics
-    final_epoch_train_metrics = {
-        m.name: (
-            float(m.result())
-            if not isinstance(m.result(), dict)
-            else float(m.result().get("total", 0))
-        )
-        for m in model.metrics
-    }
+    avg_loss = sum_batch_losses / num_batches_epoch if num_batches_epoch > 0 else 0.0
 
-    # The 'loss' metric from compiled_metrics should be the average loss.
-    # If not, calculate manually:
-    if "loss" not in final_epoch_train_metrics and num_batches_epoch > 0:
-        final_epoch_train_metrics["loss"] = sum_batch_losses / num_batches_epoch
-    elif num_batches_epoch == 0:
-        final_epoch_train_metrics["loss"] = 0.0
-
-    return final_epoch_train_metrics
+    return {"loss": avg_loss}
 
 
 def log_epoch_summary_fn(
@@ -815,6 +789,10 @@ def training_loop_orchestrator(
     )
 
     if wandb.run:
+        wandb.summary["best_epoch"] = best_epoch_metrics_tracking.get("epoch_number")
+        wandb.summary["best_val_metric"] = best_epoch_metrics_tracking.get("comparison_metric_value")
+        for k, v in best_epoch_metrics_tracking.items():
+            wandb.summary[f"best/{k}"] = v
         wandb.finish()
         console.log("Wandb session finished.")
 
