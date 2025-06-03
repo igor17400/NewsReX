@@ -120,19 +120,27 @@ class MINDDataset(BaseNewsDataset):
     def train_size(self) -> int:
         """Number of training behaviors"""
         return (
-            len(self.train_behaviors_data["labels"]) if hasattr(self, "train_behaviors_data") else 0
+            len(self.train_behaviors_data["impression_ids"])
+            if hasattr(self, "train_behaviors_data")
+            else 0
         )
 
     @property
     def val_size(self) -> int:
         """Number of validation behaviors"""
-        return len(self.val_behaviors_data["labels"]) if hasattr(self, "val_behaviors_data") else 0
+        return (
+            len(self.val_behaviors_data["impression_ids"])
+            if hasattr(self, "val_behaviors_data")
+            else 0
+        )
 
     @property
     def test_size(self) -> int:
         """Number of test behaviors"""
         return (
-            len(self.test_behaviors_data["labels"]) if hasattr(self, "test_behaviors_data") else 0
+            len(self.test_behaviors_data["impression_ids"])
+            if hasattr(self, "test_behaviors_data")
+            else 0
         )
 
     def process_news(self) -> Dict[str, np.ndarray]:
@@ -242,17 +250,23 @@ class MINDDataset(BaseNewsDataset):
             logger.info("Creating category and subcategory mappings...")
             unique_categories = sorted(all_news_df["category"].unique())
             unique_subcategories = sorted(all_news_df["subcategory"].unique())
-            
+
             self.category_to_idx = {cat: idx for idx, cat in enumerate(unique_categories)}
-            self.subcategory_to_idx = {subcat: idx for idx, subcat in enumerate(unique_subcategories)}
-            
-            logger.info(f"Found {len(unique_categories)} unique categories and {len(unique_subcategories)} unique subcategories")
-            
+            self.subcategory_to_idx = {
+                subcat: idx for idx, subcat in enumerate(unique_subcategories)
+            }
+
+            logger.info(
+                f"Found {len(unique_categories)} unique categories and {len(unique_subcategories)} unique subcategories"
+            )
+
             # Create category and subcategory arrays
             category_indices = np.zeros(len(unique_news_ids_str), dtype=np.int32)
             subcategory_indices = np.zeros(len(unique_news_ids_str), dtype=np.int32)
-            
-            for nid_str, cat, subcat in zip(all_news_df["id"], all_news_df["category"], all_news_df["subcategory"]):
+
+            for nid_str, cat, subcat in zip(
+                all_news_df["id"], all_news_df["category"], all_news_df["subcategory"]
+            ):
                 int_idx = self.news_str_id_to_int_idx[nid_str]
                 category_indices[int_idx] = self.category_to_idx[cat]
                 subcategory_indices[int_idx] = self.subcategory_to_idx[subcat]
@@ -358,8 +372,12 @@ class MINDDataset(BaseNewsDataset):
                 TimeRemainingColumn(),
                 console=console,
             ) as progress:
-                task = progress.add_task("Tokenizing all news titles and abstracts...", total=len(all_news_df))
-                for nid_str, title_text, abstract_text in zip(all_news_df["id"], all_news_df["title"], all_news_df["abstract"]):
+                task = progress.add_task(
+                    "Tokenizing all news titles and abstracts...", total=len(all_news_df)
+                )
+                for nid_str, title_text, abstract_text in zip(
+                    all_news_df["id"], all_news_df["title"], all_news_df["abstract"]
+                ):
                     int_idx = self.news_str_id_to_int_idx[nid_str]
                     # Tokenize title
                     tokenized_titles_np[int_idx] = self.tokenize_text(
@@ -408,7 +426,9 @@ class MINDDataset(BaseNewsDataset):
                 loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
             ).astype(np.float32)
 
-            logger.info("Making sure <NUM> vector is in the embedding matrix and tf.gather runs on CPU...")
+            logger.info(
+                "Making sure <NUM> vector is in the embedding matrix and tf.gather runs on CPU..."
+            )
             # Force tf.gather operations using the CPU-bound glove_tensor_tf to also run on CPU.
             # This avoids copying the large glove_tensor_tf to GPU for these lookup operations.
             with tf.device("/cpu:0"):
@@ -440,14 +460,18 @@ class MINDDataset(BaseNewsDataset):
                     TimeRemainingColumn(),
                     console=console,
                 ) as progress:
-                    task = progress.add_task("Populating inital embedding matrix...", total=len(self.vocab))
+                    task = progress.add_task(
+                        "Populating inital embedding matrix...", total=len(self.vocab)
+                    )
                     for word, idx in self.vocab.items():
                         if word in ["[PAD]", "[UNK]", "<NUM>"]:  # Already handled
                             progress.advance(task)
                             continue
                         glove_word_idx = glove_vocab_map.get(word)
                         if glove_word_idx is not None:
-                            embedding_matrix[idx] = tf.gather(glove_tensor_tf, glove_word_idx).numpy()
+                            embedding_matrix[idx] = tf.gather(
+                                glove_tensor_tf, glove_word_idx
+                            ).numpy()
                         else:  # Word not in GloVe, initialize randomly
                             embedding_matrix[idx] = np.random.normal(
                                 loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
@@ -734,7 +758,9 @@ class MINDDataset(BaseNewsDataset):
             },
         )
 
-    def _download_and_unzip_file(self, url: str, zip_path: Path, extract_path: Path, description: str) -> None:
+    def _download_and_unzip_file(
+        self, url: str, zip_path: Path, extract_path: Path, description: str
+    ) -> None:
         """Downloads a file from a URL and unzips it."""
         logger.info(f"Downloading {description} data from {url} to {zip_path}...")
         # Create download directory if it doesn't exist
@@ -757,9 +783,13 @@ class MINDDataset(BaseNewsDataset):
         graph_extract_path = self.dataset_path / "download" / "wikidata-graph"
 
         if not graph_extract_path.exists():
-            graph_url = "https://mind201910.blob.core.windows.net/knowledge-graph/wikidata-graph.zip"
+            graph_url = (
+                "https://mind201910.blob.core.windows.net/knowledge-graph/wikidata-graph.zip"
+            )
             graph_zip_path = self.dataset_path / "download" / "wikidata-graph.zip"
-            self._download_and_unzip_file(graph_url, graph_zip_path, graph_extract_path, "knowledge graph")
+            self._download_and_unzip_file(
+                graph_url, graph_zip_path, graph_extract_path, "knowledge graph"
+            )
         else:
             logger.info("Found existing knowledge graph data")
 
@@ -860,9 +890,13 @@ class MINDDataset(BaseNewsDataset):
                     int(h.split("N")[1]) for h in history
                 ]  # List of news IDs in the history clicked news clicked by the user
                 curr_history_tokens = [news_tokens[h_idx] for h_idx in history_nid_list]
-                curr_history_abstract_tokens = [news_abstract_tokens[h_idx] for h_idx in history_nid_list]
+                curr_history_abstract_tokens = [
+                    news_abstract_tokens[h_idx] for h_idx in history_nid_list
+                ]
                 curr_history_categories = [news_categories[h_idx] for h_idx in history_nid_list]
-                curr_history_subcategories = [news_subcategories[h_idx] for h_idx in history_nid_list]
+                curr_history_subcategories = [
+                    news_subcategories[h_idx] for h_idx in history_nid_list
+                ]
 
                 # -- Pad histories
                 history_pad_length = self.max_history_length - len(history)
@@ -902,10 +936,17 @@ class MINDDataset(BaseNewsDataset):
                         history_news_subcategories.append(curr_history_subcategories)
                         candidate_news_ids.append(cand_nid_group)
                         candidate_news_tokens.append([news_tokens[nid] for nid in cand_nid_group])
-                        candidate_news_abstract_tokens.append([news_abstract_tokens[nid] for nid in cand_nid_group])
-                        candidate_news_categories.append([news_categories[nid] for nid in cand_nid_group])
-                        candidate_news_subcategories.append([news_subcategories[nid] for nid in cand_nid_group])
+                        candidate_news_abstract_tokens.append(
+                            [news_abstract_tokens[nid] for nid in cand_nid_group]
+                        )
+                        candidate_news_categories.append(
+                            [news_categories[nid] for nid in cand_nid_group]
+                        )
+                        candidate_news_subcategories.append(
+                            [news_subcategories[nid] for nid in cand_nid_group]
+                        )
                         labels.append(label_group)
+                        impression_ids.append(row["impression_id"])
                 else:
                     # -- For validation/testing, keep original impressions without padding
                     cand_nid_group, label_group = cand_nid_group_list, label_group_list
@@ -918,9 +959,15 @@ class MINDDataset(BaseNewsDataset):
                     history_news_subcategories.append(curr_history_subcategories)
                     candidate_news_ids.append(cand_nid_group)
                     candidate_news_tokens.append([news_tokens[nid] for nid in cand_nid_group])
-                    candidate_news_abstract_tokens.append([news_abstract_tokens[nid] for nid in cand_nid_group])
-                    candidate_news_categories.append([news_categories[nid] for nid in cand_nid_group])
-                    candidate_news_subcategories.append([news_subcategories[nid] for nid in cand_nid_group])
+                    candidate_news_abstract_tokens.append(
+                        [news_abstract_tokens[nid] for nid in cand_nid_group]
+                    )
+                    candidate_news_categories.append(
+                        [news_categories[nid] for nid in cand_nid_group]
+                    )
+                    candidate_news_subcategories.append(
+                        [news_subcategories[nid] for nid in cand_nid_group]
+                    )
                     labels.append(label_group)
 
                 progress.advance(task)
@@ -930,14 +977,24 @@ class MINDDataset(BaseNewsDataset):
                 result = {
                     "histories_news_ids": np.array(histories_news_ids, dtype=np.int32),
                     "history_news_tokens": np.array(history_news_tokens, dtype=np.int32),
-                    "history_news_abstract_tokens": np.array(history_news_abstract_tokens, dtype=np.int32),
+                    "history_news_abstract_tokens": np.array(
+                        history_news_abstract_tokens, dtype=np.int32
+                    ),
                     "history_news_categories": np.array(history_news_categories, dtype=np.int32),
-                    "history_news_subcategories": np.array(history_news_subcategories, dtype=np.int32),
+                    "history_news_subcategories": np.array(
+                        history_news_subcategories, dtype=np.int32
+                    ),
                     "candidate_news_ids": np.array(candidate_news_ids, dtype=np.int32),
                     "candidate_news_tokens": np.array(candidate_news_tokens, dtype=np.int32),
-                    "candidate_news_abstract_tokens": np.array(candidate_news_abstract_tokens, dtype=np.int32),
-                    "candidate_news_categories": np.array(candidate_news_categories, dtype=np.int32),
-                    "candidate_news_subcategories": np.array(candidate_news_subcategories, dtype=np.int32),
+                    "candidate_news_abstract_tokens": np.array(
+                        candidate_news_abstract_tokens, dtype=np.int32
+                    ),
+                    "candidate_news_categories": np.array(
+                        candidate_news_categories, dtype=np.int32
+                    ),
+                    "candidate_news_subcategories": np.array(
+                        candidate_news_subcategories, dtype=np.int32
+                    ),
                     "labels": np.array(labels, dtype=np.float32),
                     "impression_ids": np.array(impression_ids, dtype=np.int32),
                 }
@@ -1102,12 +1159,10 @@ class MINDDataset(BaseNewsDataset):
         logger.info(f"Test behaviors: {len(test_behaviors):,}")
 
         # Process test behaviors
-        test_behaviors_data = self.process_behaviors(
+        return self.process_behaviors(
             test_behaviors,
             stage="test",
         )
-
-        return test_behaviors_data
 
     def train_dataloader(self, batch_size: int) -> tf.data.Dataset:
         """Create training dataset with token-based inputs."""

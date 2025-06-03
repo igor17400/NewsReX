@@ -33,6 +33,9 @@ model:
   seed: 42
   loss:
     name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
+    # 'from_logits' specifies whether the model's output is raw logits (before activation) or probabilities (after softmax/sigmoid).
+    # Set to 'false' if your model outputs probabilities (e.g., after softmax or sigmoid).
+    # Set to 'true' if your model outputs raw, unnormalized scores (logits) and you want the loss function to apply the activation internally.
     from_logits: false # Whether the model outputs logits or probabilities
 
 # Training parameters
@@ -40,11 +43,13 @@ train:
   batch_size: 64
   num_epochs: 5
   learning_rate: 0.0001
-  early_stopping_patience: 4
+  early_stopping:
+    patience: 4
+    metric: ndcg@10
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "BTC"
   experiment_name: nrms_mind_small
 
@@ -58,4 +63,4 @@ sampling:
 device:
   gpu_ids: [ 0 ] # Use first GPU
   memory_limit: 1
-  mixed_precision: true
+  mixed_precision: false

@@ -33,6 +33,7 @@ class AdditiveSelfAttention(layers.Layer):
         Args:
             input_shape: Shape of the input tensor (batch_size, sequence_length, embedding_dim).
         """
+        super().build(input_shape)
         # input_shape[-1] is the embedding_dim or feature_dim of each item in the sequence
 
         self.dense_tanh = layers.Dense(
@@ -44,7 +45,6 @@ class AdditiveSelfAttention(layers.Layer):
         if self.dropout_rate > 0.0:
             self.dropout_layer = layers.Dropout(self.dropout_rate)
 
-        super().build(input_shape)
 
     def call(
         self, inputs: tf.Tensor, training: bool = None, mask: Optional[tf.Tensor] = None
