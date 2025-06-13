@@ -32,3 +32,9 @@ use_knowledge_graph: false # Enable/disable knowledge graph processing
 
 # Pass sampling configuration directly
 sampling: ${sampling}
+
+# Process Title / Abstract / Category / Subcategory
+process_title: false
+process_abstract: false
+process_category: false
+process_subcategory: false

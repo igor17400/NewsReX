@@ -45,7 +45,6 @@ class AdditiveSelfAttention(layers.Layer):
         if self.dropout_rate > 0.0:
             self.dropout_layer = layers.Dropout(self.dropout_rate)
 
-
     def call(
         self, inputs: tf.Tensor, training: bool = None, mask: Optional[tf.Tensor] = None
     ) -> tf.Tensor:
@@ -93,6 +92,113 @@ class AdditiveSelfAttention(layers.Layer):
             {
                 "query_vector_dim": self.query_vector_dim,
                 "dropout": self.dropout_rate,
+            }
+        )
+        return config
+
+
+class AdditiveAttentionLayer(layers.Layer):
+    """
+    Additive Attention layer with modern Keras implementation.
+
+    This layer implements additive attention mechanism (also known as Bahdanau attention)
+    which computes attention weights using a feed-forward neural network.
+
+    Args:
+        attention_dim (int): Dimension of the attention mechanism's hidden layer.
+        dropout_rate (float): Dropout rate to apply to the attention mechanism. Defaults to 0.0.
+        seed (int): Random seed for reproducibility. Defaults to 42.
+    """
+
+    def __init__(
+        self, attention_dim: int = 200, dropout_rate: float = 0.0, seed: int = 42, **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.attention_dim = attention_dim
+        self.dropout_rate = dropout_rate
+        self.seed = seed
+
+        # Layers will be defined in build() to know input_dim
+        self.dense_tanh = None
+        self.dense_score = None
+        self.dropout_layer = None
+
+    def build(self, input_shape: tf.TensorShape):
+        """
+        Build the layer's weights.
+
+        Args:
+            input_shape: Shape of the input tensor (batch_size, sequence_length, embedding_dim).
+        """
+        super().build(input_shape)
+
+        # First dense layer with tanh activation
+        self.dense_tanh = layers.Dense(
+            units=self.attention_dim,
+            activation="tanh",
+            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=tf.keras.initializers.Zeros(),
+            name="attention_dense_tanh",
+        )
+
+        # Second dense layer for attention scores (no activation)
+        self.dense_score = layers.Dense(
+            units=1,
+            activation=None,
+            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=tf.keras.initializers.Zeros(),
+            name="attention_dense_score",
+        )
+
+        if self.dropout_rate > 0.0:
+            self.dropout_layer = layers.Dropout(self.dropout_rate, seed=self.seed)
+
+    def call(
+        self, inputs: tf.Tensor, training: bool = None, mask: Optional[tf.Tensor] = None
+    ) -> tf.Tensor:
+        """
+        Forward pass of the layer.
+
+        Args:
+            inputs: Input tensor of shape (batch_size, sequence_length, embedding_dim).
+            training: Boolean indicating whether the layer should behave in training mode.
+            mask: Optional mask tensor of shape (batch_size, sequence_length) with 0s for masked elements.
+
+        Returns:
+            Context vector of shape (batch_size, embedding_dim).
+        """
+        # Process inputs through the first dense layer
+        # shape: (batch_size, sequence_length, attention_dim)
+        attention = self.dense_tanh(inputs)
+
+        if self.dropout_layer is not None:
+            attention = self.dropout_layer(attention, training=training)
+
+        # Compute attention scores
+        # shape: (batch_size, sequence_length, 1)
+        attention_scores = self.dense_score(attention)
+
+        if mask is not None:
+            # Apply the mask (set scores of masked items to a very small number before softmax)
+            mask = tf.expand_dims(tf.cast(mask, tf.float32), axis=-1)
+            attention_scores += mask * -1e9
+
+        # Compute attention weights using softmax
+        # shape: (batch_size, sequence_length, 1)
+        attention_weights = tf.nn.softmax(attention_scores, axis=1)
+
+        # Compute the context vector as a weighted sum of the input sequence
+        # shape: (batch_size, embedding_dim)
+        return tf.reduce_sum(attention_weights * inputs, axis=1)
+
+    def get_config(self) -> Dict[str, Any]:
+        """Returns the serializable config of the layer."""
+        config = super().get_config()
+        config.update(
+            {
+                "attention_dim": self.attention_dim,
+                "dropout_rate": self.dropout_rate,
+                "seed": self.seed,
             }
         )
         return config

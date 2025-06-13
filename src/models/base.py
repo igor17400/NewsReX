@@ -1,128 +1,210 @@
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Tuple, Optional
-
+from typing import Any, Dict, List, Optional, Tuple
+import numpy as np
 import tensorflow as tf
-from ..utils.losses import get_loss
+from tensorflow.keras import Model
+from tqdm import tqdm
+
+from utils.io import save_predictions_to_file_fn
+from datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
 
 
-class BaseNewsRecommender(tf.keras.Model, ABC):
+class BaseModel(Model):
     """Base class for news recommendation models.
 
-    This class enforces a consistent interface for all news recommendation models:
-    1. Training mode: Process multiple candidates with softmax activation
-    2. Validation/Testing mode: Process single candidate with sigmoid activation
-    3. Consistent input/output handling
-
-    Args:
-        name: Model name
-        loss: Name of the loss function to use
-        loss_kwargs: Additional arguments for the loss function
+    This class provides common functionality for news recommendation models,
+    including methods for fast evaluation using precomputed vectors.
     """
 
-    def __init__(
+    def precompute_news_vectors(
         self,
-        name: str = "base_news_recommender",
-        loss: str = "categorical_crossentropy",
-        loss_kwargs: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(name=name, **kwargs)
-        self.model = None  # Training model
-        self.scorer = None  # Scoring model
-        
-        # Initialize loss function
-        loss_kwargs = loss_kwargs or {}
-        self.loss_fn = get_loss(loss, **loss_kwargs)
-
-    @abstractmethod
-    def _build_model(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
-        """Build both the training model and the scorer model.
-
-        Returns:
-            Tuple containing:
-                - Training model: Processes multiple candidates with softmax activation
-                - Scoring model: Processes single candidate with sigmoid activation
-        """
-        pass
-
-    def call(self, inputs: Dict[str, tf.Tensor], training: bool = True) -> tf.Tensor:
-        """Forward pass using the appropriate model.
+        news_dataloader: NewsBatchDataloader,
+        progress: Any,
+    ) -> Dict[str, np.ndarray]:
+        """Precompute vectors for all news articles.
 
         Args:
-            inputs: Dictionary containing model inputs
-            training: Whether the model is being called in training mode
+            news_dataloader: NewsBatchDataloader instance for news articles
+            progress: Progress bar manager
 
         Returns:
-            Model predictions
+            Dictionary mapping news IDs to their vectors
         """
-        if training:
-            return self.model(inputs)
+        news_vecs_dict = {}
+        total_news = len(news_dataloader)
 
-        # For validation/testing, reshape the candidates to process them all at once
-        # Shape of candidate inputs: (batch=1, num_candidates, ...)
-        candidate_key = next(k for k in inputs if k.startswith("cand_"))
-        _, num_candidates = inputs[candidate_key].shape[:2]
+        news_progress = progress.add_task(
+            "Computing news vectors...", total=total_news, visible=True
+        )
 
-        # Reshape candidates to (num_candidates, 1, ...)
-        reshaped_candidates = {
-            f"cand_one_{k[5:]}": tf.reshape(v, [num_candidates, 1, -1]) if len(v.shape) == 3
-            else tf.reshape(v, [num_candidates, 1])
-            for k, v in inputs.items()
-            if k.startswith("cand_")
-        }
+        for batch in news_dataloader:
+            # Convert batch to numpy arrays
+            news_ids = batch["news_id"]
+            news_features = batch["news_features"]
 
-        # Repeat history for each candidate
-        repeated_history = {
-            k: tf.repeat(v, repeats=num_candidates, axis=0)
-            for k, v in inputs.items()
-            if not k.startswith("cand_")
-        }
+            batch_vecs = self.newsencoder(news_features, training=False).numpy()
 
-        # Process all candidates at once
-        adapted_inputs = repeated_history | reshaped_candidates
-        scores = self.scorer(adapted_inputs)
+            for i, news_id in enumerate(news_ids):
+                news_vecs_dict[str(news_id)] = batch_vecs[i]
 
-        # Reshape scores to (1, num_candidates) to match expected output shape
-        return tf.reshape(scores, [1, num_candidates])
+            progress.update(news_progress, advance=len(news_ids))
 
-    def _update_metrics(self, y: tf.Tensor, y_pred: tf.Tensor, loss: tf.Tensor) -> Dict[str, tf.Tensor]:
-        """Update metrics and return their values.
+        progress.remove_task(news_progress)
+        return news_vecs_dict
+
+    def precompute_user_vectors(
+        self, user_dataloader: UserHistoryBatchDataloader, progress: Optional[tqdm] = None
+    ) -> Dict[int, np.ndarray]:
+        """Pre-compute user vectors for fast evaluation.
 
         Args:
-            y: True labels
-            y_pred: Predicted values
-            loss: Loss value
+            user_dataloader: UserHistoryBatchDataloader for user history data
+            progress: Optional progress bar
 
         Returns:
-            Dictionary of metric names and values
+            Dictionary mapping impression IDs based on the users behaviors to their vectors
         """
-        metrics = {}
-        for metric in self.metrics:
-            metric.update_state(y, y_pred)
-            metrics[metric.name] = metric.result()
-        metrics['loss'] = loss
-        return metrics
+        user_vecs_dict = {}
+        user_progress = progress.add_task(
+            "Computing user vectors...", total=len(user_dataloader), visible=True
+        )
 
-    def train_step(self, data: Tuple[tf.Tensor, tf.Tensor]) -> Dict[str, tf.Tensor]:
-        """Custom training step"""
-        x, y = data
+        for impression_ids, features in user_dataloader:
+            # Get user representation from history
+            user_vec = self.userencoder(features, training=False)
 
-        with tf.GradientTape() as tape:
-            y_pred = self(x, training=True)
-            loss = self.loss_fn(y, y_pred)
+            # Store user vector for each impression in the batch
+            for i, imp_id in enumerate(impression_ids):
+                user_vecs_dict[int(imp_id)] = user_vec[i].numpy()
 
-        # Compute gradients
-        trainable_vars = self.trainable_variables
-        gradients = tape.gradient(loss, trainable_vars)
+            progress.update(user_progress, advance=len(impression_ids))
 
-        # Update weights
-        self.optimizer.apply_gradients(zip(gradients, trainable_vars))
+        progress.remove_task(user_progress)
 
-        return self._update_metrics(y, y_pred, loss)
+        return user_vecs_dict
 
-    def test_step(self, data: Tuple[tf.Tensor, tf.Tensor]) -> Dict[str, tf.Tensor]:
-        """Custom test step"""
-        x, y = data
-        y_pred = self(x, training=False)
-        loss = self.loss_fn(y, y_pred)
-        return self._update_metrics(y, y_pred, loss) 
+    def fast_evaluate(
+        self,
+        user_hist_dataloader,
+        news_dataloader,
+        impression_iterator,
+        metrics_calculator,
+        progress,
+        mode="validate",
+        save_predictions_path=None,
+        epoch=None,
+    ) -> Dict[str, float]:
+        """Fast evaluation of the model using precomputed vectors and dataloader iterators."""
+        # 1. Precompute news vectors
+        news_vecs_dict = self.precompute_news_vectors(news_dataloader, progress)
+
+        # 2. Precompute user vectors
+        user_vecs_dict = self.precompute_user_vectors(user_hist_dataloader, progress)
+
+        # 3. Score impressions using precomputed user and news vectors
+        group_labels_list = []
+        group_preds_list = []
+        predictions_to_save = {}
+
+        # Create progress bar for impressions
+        impression_progress = progress.add_task(
+            "Processing impressions...", total=len(impression_iterator), visible=True
+        )
+
+        for impression in impression_iterator:
+            _, labels, impression_id, cand_ids = impression
+
+            # Get user vector for this impression
+            user_vector = user_vecs_dict[impression_id.numpy()[0]]
+
+            # Get news vectors for candidate news
+            cand_ids_np = cand_ids.numpy()[0]  # Get numpy array of candidate IDs
+            news_vectors = []
+            for nid in cand_ids_np:
+                news_key = f"N{str(nid)}"
+                news_vectors.append(news_vecs_dict[news_key])
+            
+            # Calculate scores using dot product
+            scores = np.dot(np.stack(news_vectors, axis=0), user_vector)
+
+            group_labels_list.append(labels.numpy())
+            group_preds_list.append(scores)
+
+            if save_predictions_path:
+                predictions_to_save[str(cand_ids.numpy())] = (
+                    labels.numpy().tolist(),
+                    scores.tolist(),
+                )
+
+            progress.update(impression_progress, advance=1)
+
+        progress.remove_task(impression_progress)
+
+        # 4. Compute metrics
+        final_metrics = self._compute_metrics(
+            group_labels_list, group_preds_list, metrics_calculator, progress
+        )
+        final_metrics["num_impressions"] = len(group_labels_list)
+
+        if save_predictions_path:
+            save_predictions_to_file_fn(predictions_to_save, save_predictions_path, epoch, mode)
+
+        return final_metrics
+
+    def _compute_metrics(
+        self,
+        group_labels_list: List[np.ndarray],
+        group_preds_list: List[np.ndarray],
+        metrics_calculator: Any,
+        progress: Any,
+    ) -> Dict[str, float]:
+        """Computes final metrics from collected predictions and labels."""
+        val_loss_total = 0.0
+        num_valid_impressions_for_loss = 0
+        metric_values_agg = {key: [] for key in metrics_calculator.METRIC_NAMES}
+
+        for labels_np, scores_np in zip(group_labels_list, group_preds_list):
+            if labels_np.size == 0 or scores_np.size == 0:
+                continue
+
+            labels_tf = tf.constant([labels_np], dtype=tf.float32)
+            scores_tf_logits = tf.constant([scores_np], dtype=tf.float32)
+
+            if self._has_nan_or_inf(scores_tf_logits, labels_tf):
+                progress.console.print("[WARNING fast_evaluate] NaN/Inf detected. Skipping loss.")
+                continue
+
+            scores_tf_probs = tf.nn.softmax(scores_tf_logits, axis=-1)
+
+            try:
+                loss = self.compute_loss(y=labels_tf, y_pred=scores_tf_probs, training=False)
+                if loss is not None:
+                    val_loss_total += loss.numpy()
+                    num_valid_impressions_for_loss += 1
+            except Exception as e:
+                progress.console.print(f"[WARNING fast_evaluate] Error calculating loss: {e}.")
+
+            impression_metrics = metrics_calculator.compute_metrics(
+                y_true=labels_tf, y_pred_logits=scores_tf_logits
+            )
+            for metric_name, value in impression_metrics.items():
+                if metric_name in metric_values_agg:
+                    metric_values_agg[metric_name].append(float(value))
+
+        final_metrics = {
+            "loss": (
+                (val_loss_total / num_valid_impressions_for_loss)
+                if num_valid_impressions_for_loss > 0
+                else 0.0
+            )
+        }
+        for metric_name, values_list in metric_values_agg.items():
+            final_metrics[metric_name] = np.mean(values_list) if values_list else 0.0
+
+        return final_metrics
+
+    def _has_nan_or_inf(self, *tensors: tf.Tensor) -> bool:
+        """Checks if any tensor in the list contains NaN or Inf values."""
+        for tensor in tensors:
+            if tf.reduce_any(tf.math.is_nan(tensor)) or tf.reduce_any(tf.math.is_inf(tensor)):
+                return True
+        return False

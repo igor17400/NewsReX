@@ -22,7 +22,12 @@ from utils.embeddings import EmbeddingsManager
 from utils.logging import setup_logging
 from utils.sampling import ImpressionSampler
 from datasets.utils import display_statistics, apply_data_fraction, string_is_number
-from datasets.dataloader import NewsDataLoader, ImpressionIterator
+from datasets.dataloader import (
+    NewsDataLoader,
+    UserHistoryBatchDataloader,
+    NewsBatchDataloader,
+    ImpressionIterator,
+)
 from datasets.knowledge_graph import KnowledgeGraphProcessor
 
 # Setup logging
@@ -55,6 +60,10 @@ class MINDDataset(BaseNewsDataset):
         validation_split_percentage: float = 0.05,
         validation_split_seed: Optional[int] = None,
         word_threshold: int = 3,
+        process_title: bool = True,
+        process_abstract: bool = True,
+        process_category: bool = True,
+        process_subcategory: bool = True,
     ):
         super().__init__()
         self.name = name
@@ -77,6 +86,10 @@ class MINDDataset(BaseNewsDataset):
         self.mode = mode
         self.random_train_samples = random_train_samples
         self.word_threshold = word_threshold
+        self.process_title = process_title
+        self.process_abstract = process_abstract
+        self.process_category = process_category
+        self.process_subcategory = process_subcategory
 
         # Store validation split parameters
         self.validation_split_strategy = validation_split_strategy
@@ -809,6 +822,7 @@ class MINDDataset(BaseNewsDataset):
         candidate_news_subcategories = []  # Subcategories for each candidate news article
         labels = []  # Labels for each candidate news article
         impression_ids = []  # IDs for each impression. That's the row in the behaviors.tsv file
+        user_ids = []  # IDs for each user
 
         # Statistics tracking
         total_original_rows = len(behaviors_df)
@@ -872,6 +886,7 @@ class MINDDataset(BaseNewsDataset):
             for _, row in behaviors_df.iterrows():
                 # Count positives in this row
                 impressions = row["impressions"].split()
+                user_id = row["user_id"].split("U")[1]
                 positives_count = sum(imp.split("-")[1] == "1" for imp in impressions)
 
                 total_positives += positives_count
@@ -945,6 +960,7 @@ class MINDDataset(BaseNewsDataset):
                         )
                         labels.append(label_group)
                         impression_ids.append(row["impression_id"])
+                        user_ids.append(user_id)
                 else:
                     # -- For validation/testing, keep original impressions without padding
                     cand_nid_group, label_group = cand_nid_group_list, label_group_list
@@ -968,6 +984,7 @@ class MINDDataset(BaseNewsDataset):
                     )
                     labels.append(label_group)
                     impression_ids.append(row["impression_id"])
+                    user_ids.append(user_id)
 
                 progress.advance(task)
 
@@ -996,6 +1013,7 @@ class MINDDataset(BaseNewsDataset):
                     ),
                     "labels": np.array(labels, dtype=np.float32),
                     "impression_ids": np.array(impression_ids, dtype=np.int32),
+                    "user_ids": np.array(user_ids, dtype=np.int32),
                 }
             else:
                 # For val/test, keep as lists to handle variable lengths
@@ -1012,6 +1030,7 @@ class MINDDataset(BaseNewsDataset):
                     "candidate_news_subcategories": candidate_news_subcategories,
                     "labels": labels,
                     "impression_ids": impression_ids,
+                    "user_ids": user_ids,
                 }
 
             # -- Calculate statistics
@@ -1030,6 +1049,7 @@ class MINDDataset(BaseNewsDataset):
             )
             logger.info(f"Maximum positives in a single row: {max_positives_in_row}")
             logger.info(f"Average positives per row: {total_positives/total_original_rows:.2f}")
+            logger.info(f"Total users: {len(set(user_ids))}")
 
             return result
 
@@ -1167,28 +1187,96 @@ class MINDDataset(BaseNewsDataset):
         """Create training dataset with token-based inputs."""
         return NewsDataLoader.create_train_dataset(
             history_news_tokens=self.train_behaviors_data["history_news_tokens"],
+            history_news_abstract_tokens=self.train_behaviors_data["history_news_abstract_tokens"],
+            history_news_category=self.train_behaviors_data["history_news_categories"],
+            history_news_subcategory=self.train_behaviors_data["history_news_subcategories"],
             candidate_news_tokens=self.train_behaviors_data["candidate_news_tokens"],
+            candidate_news_abstract_tokens=self.train_behaviors_data[
+                "candidate_news_abstract_tokens"
+            ],
+            candidate_news_category=self.train_behaviors_data["candidate_news_categories"],
+            candidate_news_subcategory=self.train_behaviors_data["candidate_news_subcategories"],
             labels=self.train_behaviors_data["labels"],
             batch_size=batch_size,
+            process_title=self.process_title,
+            process_abstract=self.process_abstract,
+            process_category=self.process_category,
+            process_subcategory=self.process_subcategory,
         )
 
-    def val_dataloader(self) -> ImpressionIterator:
-        """Create validation dataset for impression-by-impression evaluation."""
-        return NewsDataLoader.create_eval_iterator(
-            history_news_tokens=self.val_behaviors_data["history_news_tokens"],
-            candidate_news_tokens=self.val_behaviors_data["candidate_news_tokens"],
-            labels=self.val_behaviors_data["labels"],
-            impression_ids=self.val_behaviors_data["impression_ids"],
+    def user_history_dataloader(self, mode: str) -> tf.data.Dataset:
+        """Create dataloader for user history validation/testing."""
+        if mode == "val":
+            user_history_tokens = self.val_behaviors_data["history_news_tokens"]
+            user_history_abstract_tokens = self.val_behaviors_data["history_news_abstract_tokens"]
+            user_history_category = self.val_behaviors_data["history_news_categories"]
+            user_history_subcategory = self.val_behaviors_data["history_news_subcategories"]
+            impression_ids = self.val_behaviors_data["impression_ids"]
+        elif mode == "test":
+            user_history_tokens = self.test_behaviors_data["history_news_tokens"]
+            user_history_abstract_tokens = self.test_behaviors_data["history_news_abstract_tokens"]
+            user_history_category = self.test_behaviors_data["history_news_categories"]
+            user_history_subcategory = self.test_behaviors_data["history_news_subcategories"]
+            impression_ids = self.test_behaviors_data["impression_ids"]
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        return UserHistoryBatchDataloader(
+            history_tokens=user_history_tokens,
+            history_abstract_tokens=user_history_abstract_tokens,
+            history_category=user_history_category,
+            history_subcategory=user_history_subcategory,
+            impression_ids=impression_ids,
+            batch_size=512,
+            process_title=self.process_title,
+            process_abstract=self.process_abstract,
+            process_category=self.process_category,
+            process_subcategory=self.process_subcategory,
         )
 
-    def test_dataloader(self) -> ImpressionIterator:
-        """Create test dataset for impression-by-impression evaluation."""
-        return NewsDataLoader.create_eval_iterator(
-            history_news_tokens=self.test_behaviors_data["history_news_tokens"],
-            candidate_news_tokens=self.test_behaviors_data["candidate_news_tokens"],
-            labels=self.test_behaviors_data["labels"],
-            impression_ids=self.test_behaviors_data["impression_ids"],
+    def impression_dataloader(self, mode: str) -> tf.data.Dataset:
+        """Create dataloader for impressions validation/testing."""
+        if mode == "val":
+            impression_tokens = self.val_behaviors_data["candidate_news_tokens"]
+            impression_abstract_tokens = self.val_behaviors_data["candidate_news_abstract_tokens"]
+            impression_category = self.val_behaviors_data["candidate_news_categories"]
+            impression_subcategory = self.val_behaviors_data["candidate_news_subcategories"]
+            labels = self.val_behaviors_data["labels"]
+            impression_ids = self.val_behaviors_data["impression_ids"]
+            candidate_ids = self.val_behaviors_data["candidate_news_ids"]
+        elif mode == "test":
+            impression_tokens = self.test_behaviors_data["candidate_news_tokens"]
+            impression_abstract_tokens = self.test_behaviors_data["candidate_news_abstract_tokens"]
+            impression_category = self.test_behaviors_data["candidate_news_categories"]
+            impression_subcategory = self.test_behaviors_data["candidate_news_subcategories"]
+            labels = self.test_behaviors_data["labels"]
+            impression_ids = self.test_behaviors_data["impression_ids"]
+            candidate_ids = self.test_behaviors_data["candidate_news_ids"]
+        
+        return ImpressionIterator(
+            impression_tokens=impression_tokens,
+            impression_abstract_tokens=impression_abstract_tokens,
+            impression_category=impression_category,
+            impression_subcategory=impression_subcategory,
+            labels=labels,
+            impression_ids=impression_ids,
+            candidate_ids=candidate_ids,
+            process_title=self.process_title,
+            process_abstract=self.process_abstract,
+            process_category=self.process_category,
         )
+
+    def news_dataloader(self) -> tf.data.Dataset:
+        """Create dataloader for processed news validation/testing."""
+        return NewsBatchDataloader(
+            news_ids=self.processed_news["news_ids_original_strings"],
+            news_tokens=self.processed_news["tokens"],
+            news_abstract_tokens=self.processed_news["abstract_tokens"],
+            news_category_indices=self.processed_news["category_indices"],
+            news_subcategory_indices=self.processed_news["subcategory_indices"],
+            batch_size=4512,
+        )
+    
 
     def _display_statistics(
         self,

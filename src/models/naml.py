@@ -1,518 +1,539 @@
-from typing import Any, Optional, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
+from pathlib import Path
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
-from .base import BaseNewsRecommender
-from .layers import AdditiveSelfAttention
+from .layers import AdditiveAttentionLayer
+from .base import BaseModel
 
 
-class NewsEncoder(layers.Layer):
-    """Encodes news articles into fixed-length vector representations using multi-view learning.
+class NewsInputSplitter(tf.keras.layers.Layer):
+    """Splits a concatenated news input into its components (title, abstract, category, subcategory)."""
 
-    The encoder processes multiple views of news content:
-    1. Title text
-    2. Abstract text
-    3. Category information
-    4. Subcategory information
+    def __init__(self, title_length: int, abstract_length: int, **kwargs):
+        super().__init__(**kwargs)
+        self.title_length = title_length
+        self.abstract_length = abstract_length
 
-    Each view is processed through:
-    1. Word embeddings (for text) or category embeddings
-    2. CNN for feature extraction (for text)
-    3. Attention mechanism for each view
-    4. View-level attention to combine all views
+    def call(self, inputs):
+        # Split the concatenated input into its components
+        title_tokens = inputs[:, : self.title_length]
+        abstract_tokens = inputs[:, self.title_length : self.title_length + self.abstract_length]
+        category_id = inputs[
+            :,
+            self.title_length + self.abstract_length : self.title_length + self.abstract_length + 1,
+        ]
+        subcategory_id = inputs[:, self.title_length + self.abstract_length + 1 :]
 
-    Args:
-        word_embedding_layer: Layer for word embeddings
-        category_embedding_dim: Dimension of category embeddings
-        num_categories: Number of unique categories
-        num_subcategories: Number of unique subcategories
-        cnn_filter_num: Number of CNN filters
-        cnn_kernel_size: Size of CNN kernel
-        word_attention_query_dim: Dimension of word attention query
-        view_attention_query_dim: Dimension of view attention query
-        news_encoder_dense_units: Number of units in dense layers
-        dropout_rate: Dropout rate
-        news_embedding_dim: Final news embedding dimension
+        return {
+            "title_tokens": title_tokens,
+            "abstract_tokens": abstract_tokens,
+            "category_id": category_id,
+            "subcategory_id": subcategory_id,
+        }
+
+    def compute_output_shape(self, input_shape):
+        return {
+            "title_tokens": (input_shape[0], self.title_length),
+            "abstract_tokens": (input_shape[0], self.abstract_length),
+            "category_id": (input_shape[0], 1),
+            "subcategory_id": (input_shape[0], 1),
+        }
+
+
+class NAML(BaseModel):
+    """Neural Attentive Multi-View Learning (NAML) model for news recommendation.
+
+    This model is based on the paper: "Neural News Recommendation with Attentive Multi-View Learning"
+    by C. Wu et al. It learns news representations from multiple views (title, abstract, category)
+    and user representations from their browsing history.
+
+    Key features:
+    - Multi-view news encoding: Processes title, abstract, and categories separately.
+    - View-level attention: Combines different news views into a unified representation.
+    - Attentive user encoding: Uses multi-head self-attention over historical news.
     """
 
     def __init__(
         self,
-        word_embedding_layer: layers.Embedding,
-        category_embedding_dim: int,
-        sub_category_embedding_dim: int,
-        num_categories: int,
-        num_subcategories: int,
-        cnn_filter_num: int,
-        cnn_kernel_size: int,
-        word_attention_query_dim: int,
-        view_attention_query_dim: int,
-        news_encoder_dense_units: int,
-        dropout_rate: float,
-        news_embedding_dim: int,
-        name: str = "naml_news_encoder",
-        **kwargs: Any,
-    ) -> None:
+        processed_news: Dict[str, Any],
+        max_title_length: int,
+        max_abstract_length: int,
+        embedding_size: int = 300,
+        category_embedding_dim: int = 100,
+        subcategory_embedding_dim: int = 100,
+        cnn_filter_num: int = 400,
+        cnn_kernel_size: int = 3,
+        word_attention_dim: int = 200,
+        view_attention_dim: int = 200,
+        user_num_attention_heads: int = 16,
+        user_attention_hidden_dim: int = 200,
+        dropout_rate: float = 0.2,
+        activation: str = "relu",
+        max_history_length: int = 50,
+        max_impressions_length: int = 5,
+        seed: int = 42,
+        name: str = "naml",
+        **kwargs,
+    ):
         super().__init__(name=name, **kwargs)
 
-        self.word_embedding_layer = word_embedding_layer
+        # Configurable parameters
+        self.max_title_length = max_title_length
+        self.max_abstract_length = max_abstract_length
+        self.embedding_size = embedding_size
+        self.category_embedding_dim = category_embedding_dim
+        self.subcategory_embedding_dim = subcategory_embedding_dim
+        self.cnn_filter_num = cnn_filter_num
+        self.cnn_kernel_size = cnn_kernel_size
+        self.word_attention_dim = word_attention_dim
+        self.view_attention_dim = view_attention_dim
+        self.user_num_attention_heads = user_num_attention_heads
+        self.user_attention_hidden_dim = user_attention_hidden_dim
+        self.dropout_rate = dropout_rate
+        self.activation = activation
+        self.max_history_length = max_history_length
+        self.max_impressions_length = max_impressions_length
+        self.seed = seed
 
-        # CNN layers for text processing
-        self.title_cnn = layers.Conv1D(
-            filters=cnn_filter_num,
-            kernel_size=cnn_kernel_size,
+        tf.random.set_seed(self.seed)
+
+        # Unpack processed data from the dataset
+        self.vocab_size = processed_news["vocab_size"]
+        self.num_categories = processed_news["num_categories"]
+        self.num_subcategories = processed_news["num_subcategories"]
+        self.embeddings_matrix = processed_news["embeddings"]
+
+        # Build reusable embedding layers
+        self.word_embedding_layer = self._build_word_embedding_layer()
+        self.category_embedding_layer = self._build_category_embedding_layer()
+        self.subcategory_embedding_layer = self._build_subcategory_embedding_layer()
+
+        # Build core model components
+        self.newsencoder = self._build_newsencoder()
+        self.userencoder = self._build_userencoder()
+
+        # Build final training and scoring models
+        self.training_model, self.scorer_model = self._build_graph_models()
+
+    def _build_word_embedding_layer(self) -> layers.Embedding:
+        return layers.Embedding(
+            self.vocab_size,
+            self.embedding_size,
+            embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
+            trainable=True,
+            mask_zero=False,
+            name="word_embedding",
+        )
+
+    def _build_title_encoder(self) -> tf.keras.Model:
+        """Builds the title encoder which processes the title of a news article."""
+        input_title = tf.keras.Input(
+            shape=(self.max_title_length,), dtype="int32", name="title_tokens"
+        )
+        embedded_title = self.word_embedding_layer(input_title)
+
+        title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(embedded_title)
+        title_cnn = layers.Conv1D(
+            self.cnn_filter_num,
+            self.cnn_kernel_size,
+            activation=self.activation,
             padding="same",
-            activation="relu",
             name="title_cnn",
+        )(title_dropout)
+
+        title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(title_cnn)
+
+        title_attention = AdditiveAttentionLayer(
+            self.word_attention_dim, name="title_word_attention"
+        )(title_dropout)
+        title_vector = layers.Reshape((1, self.cnn_filter_num))(title_attention)
+
+        return tf.keras.Model(input_title, title_vector, name="title_encoder")
+
+    def _build_abstract_encoder(self) -> tf.keras.Model:
+        """Builds the abstract encoder which processes the abstract of a news article."""
+        input_abstract = tf.keras.Input(
+            shape=(self.max_abstract_length,), dtype="int32", name="abstract_tokens"
         )
-        self.abstract_cnn = layers.Conv1D(
-            filters=cnn_filter_num,
-            kernel_size=cnn_kernel_size,
+
+        embedded_abstract = self.word_embedding_layer(input_abstract)
+        abstract_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(embedded_abstract)
+
+        abstract_cnn = layers.Conv1D(
+            self.cnn_filter_num,
+            self.cnn_kernel_size,
+            activation=self.activation,
             padding="same",
-            activation="relu",
             name="abstract_cnn",
-        )
+        )(abstract_dropout)
+        abstract_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(abstract_cnn)
 
-        # Word-level attention for text
-        self.title_word_attention = AdditiveSelfAttention(
-            query_vector_dim=word_attention_query_dim,
-            dropout=dropout_rate,
-            name="title_word_attention",
-        )
-        self.abstract_word_attention = AdditiveSelfAttention(
-            query_vector_dim=word_attention_query_dim,
-            dropout=dropout_rate,
-            name="abstract_word_attention",
-        )
+        abstract_attention = AdditiveAttentionLayer(
+            self.word_attention_dim, name="abstract_word_attention"
+        )(abstract_dropout)
+        abstract_vector = layers.Reshape((1, self.cnn_filter_num))(abstract_attention)
 
-        # Category and subcategory embeddings
-        self.category_embedding_layer = layers.Embedding(
-            input_dim=num_categories + 1,  # +1 for padding/unknown
-            output_dim=category_embedding_dim,
+        return tf.keras.Model(input_abstract, abstract_vector, name="abstract_encoder")
+
+    def _build_category_embedding_layer(self) -> layers.Embedding:
+        """Builds the category embedding and projection layer.
+
+        This method creates a Keras model that embeds category indices and projects them into the same dimension as the CNN filter. The resulting model outputs a dense vector representation for each category.
+
+        Returns:
+            layers.Embedding: A Keras model that encodes category information.
+        """
+        input_category = tf.keras.Input(shape=(1,), dtype="int32", name="category_id")
+
+        category_embedding = layers.Embedding(
+            self.num_categories + 1,
+            self.category_embedding_dim,
+            trainable=True,
             name="category_embedding",
         )
-        self.subcategory_embedding_layer = layers.Embedding(
-            input_dim=num_subcategories + 1,  # +1 for padding/unknown
-            output_dim=sub_category_embedding_dim,
+
+        cat_emb = category_embedding(input_category)
+        cat_dense = layers.Dense(
+            self.cnn_filter_num,
+            activation=self.activation,
+            bias_initializer=tf.keras.initializers.Zeros(),
+            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            name="category_projection",
+        )(cat_emb)
+        cat_vector = layers.Reshape((1, self.cnn_filter_num))(cat_dense)
+
+        return tf.keras.Model(input_category, cat_vector, name="category_encoder")
+
+    def _build_subcategory_embedding_layer(self) -> layers.Embedding:
+        """Builds the subcategory embedding and projection layer.
+
+        This method creates a Keras model that embeds subcategory indices and projects them into the same dimension as the CNN filter. The resulting model outputs a dense vector representation for each subcategory.
+
+        Returns:
+            layers.Embedding: A Keras model that encodes subcategory information.
+        """
+        input_subcategory = tf.keras.Input(shape=(1,), dtype="int32", name="subcategory_id")
+
+        subcategory_embedding = layers.Embedding(
+            self.num_subcategories + 1,
+            self.subcategory_embedding_dim,
+            trainable=True,
             name="subcategory_embedding",
         )
 
-        # Projection layers for categories
-        self.category_projection = layers.Dense(
-            cnn_filter_num, activation="relu", name="category_projection"
-        )
-        self.subcategory_projection = layers.Dense(
-            cnn_filter_num, activation="relu", name="subcategory_projection"
+        subcat_emb = subcategory_embedding(input_subcategory)
+        subcat_dense = layers.Dense(
+            self.cnn_filter_num,
+            activation=self.activation,
+            bias_initializer=tf.keras.initializers.Zeros(),
+            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            name="subcategory_projection",
+        )(subcat_emb)
+        pred_subcat = layers.Reshape((1, self.cnn_filter_num))(subcat_dense)
+        return tf.keras.Model(input_subcategory, pred_subcat, name="subcategory_encoder")
+
+    def _build_newsencoder(self) -> tf.keras.Model:
+        """Builds the news encoder which processes multiple views of a news article."""
+        # --- Define Inputs for a single news article ---
+        # news_input -> is the input that describes a single news article
+        # It's composed of the title + abstract + category + subcategory (that's where the 2 comes from)
+        news_input = tf.keras.Input(
+            shape=(self.max_title_length + self.max_abstract_length + 2,),
+            dtype="int32",
+            name="news_tokens",
         )
 
-        # View-level attention
-        self.view_attention = AdditiveSelfAttention(
-            query_vector_dim=view_attention_query_dim, dropout=dropout_rate, name="view_attention"
+        # Split the input into its components
+        news_components = NewsInputSplitter(
+            title_length=self.max_title_length,
+            abstract_length=self.max_abstract_length,
+            name="news_input_splitter",
+        )(news_input)
+
+        # --- Title Encoder ---
+        title_encoder = self._build_title_encoder()
+        title_vector = title_encoder(news_components["title_tokens"])
+
+        # --- Abstract Encoder ---
+        abstract_encoder = self._build_abstract_encoder()
+        abstract_vector = abstract_encoder(news_components["abstract_tokens"])
+
+        # --- Category Encoder ---
+        category_encoder = self._build_category_embedding_layer()
+        category_vector = category_encoder(news_components["category_id"])
+
+        # --- Subcategory Encoder ---
+        subcategory_encoder = self._build_subcategory_embedding_layer()
+        subcategory_vector = subcategory_encoder(news_components["subcategory_id"])
+
+        # --- Combine all views ---
+        concat_views = layers.Concatenate(axis=1)(
+            [title_vector, abstract_vector, category_vector, subcategory_vector]
+        )
+        news_vector = AdditiveAttentionLayer(self.view_attention_dim, name="view_attention")(
+            concat_views
         )
 
-        # Final dense layers
-        self.final_dense1 = layers.Dense(
-            news_encoder_dense_units, activation="relu", name="news_enc_dense1"
+        return tf.keras.Model(news_input, news_vector, name="news_encoder")
+
+    def _build_userencoder(self) -> tf.keras.Model:
+        """Builds the user encoder which processes the user's news browsing history."""
+        # --- Define Inputs for a user's history ---
+        # his_input -> is the input for the news history from the user
+        # It's composed of the title + abstract + category + subcategory (that's where the 2 comes from)
+        hist_input = tf.keras.Input(
+            shape=(self.max_history_length, self.max_title_length + self.max_abstract_length + 2),
+            dtype="int32",
+            name="hist_tokens",
         )
-        self.dropout_layer = layers.Dropout(dropout_rate, name="news_enc_dropout")
-        self.final_dense2 = layers.Dense(news_embedding_dim, name="news_enc_dense2")
+
+        news_vectors = layers.TimeDistributed(self.newsencoder, name="td_history_news_encoder")(
+            hist_input
+        )
+
+        user_representation = AdditiveAttentionLayer(
+            self.user_attention_hidden_dim, name="user_additive_attention"
+        )(news_vectors)
+
+        return tf.keras.Model(hist_input, user_representation, name="user_encoder")
+
+    def _build_graph_models(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
+        """Builds the main training and scoring models."""
+        # --- Inputs for Training Model ---
+
+        # History Inputs
+        hist_title_tokens = tf.keras.Input(
+            shape=(self.max_history_length, self.max_title_length), dtype="int32"
+        )
+        hist_abstract_tokens = tf.keras.Input(
+            shape=(self.max_history_length, self.max_abstract_length), dtype="int32"
+        )
+        hist_category = tf.keras.Input(shape=(self.max_history_length, 1), dtype="int32")
+        hist_subcategory = tf.keras.Input(shape=(self.max_history_length, 1), dtype="int32")
+
+        # Candidate Inputs
+        cand_title_tokens = tf.keras.Input(
+            shape=(self.max_impressions_length, self.max_title_length), dtype="int32"
+        )
+        cand_abstract_tokens = tf.keras.Input(
+            shape=(self.max_impressions_length, self.max_abstract_length), dtype="int32"
+        )
+        cand_category = tf.keras.Input(shape=(self.max_impressions_length, 1), dtype="int32")
+        cand_subcategory = tf.keras.Input(shape=(self.max_impressions_length, 1), dtype="int32")
+
+        # Concatenate inputs
+        history_concat = layers.Concatenate(axis=-1)(
+            [
+                hist_title_tokens,
+                hist_abstract_tokens,
+                hist_category,
+                hist_subcategory,
+            ]
+        )
+        candidate_concat = layers.Concatenate(axis=-1)(
+            [
+                cand_title_tokens,
+                cand_abstract_tokens,
+                cand_category,
+                cand_subcategory,
+            ]
+        )
+
+        # --- Training Model Graph ---
+        user_representation_train = self.userencoder(history_concat)
+        candidate_news_representation_train = layers.TimeDistributed(
+            self.newsencoder, name="td_candidate_news_encoder_train"
+        )(candidate_concat)
+
+        scores = layers.Dot(axes=-1, name="dot_product_train")(
+            [candidate_news_representation_train, user_representation_train]
+        )
+        preds_train = layers.Activation("softmax", name="softmax_activation_train")(scores)
+
+        training_model = tf.keras.Model(
+            inputs=[history_concat, candidate_concat],
+            outputs=preds_train,
+            name="naml_training_model",
+        )
+
+        # --- Inputs for Scorer Model ---
+        # History Inputs
+        hist_tokens_input_score = tf.keras.Input(
+            shape=(self.max_history_length, self.max_title_length), dtype="int32"
+        )
+        hist_abstract_tokens_input_score = tf.keras.Input(
+            shape=(self.max_history_length, self.max_abstract_length), dtype="int32"
+        )
+        hist_category_input_score = tf.keras.Input(
+            shape=(self.max_history_length, 1), dtype="int32"
+        )
+        hist_subcategory_input_score = tf.keras.Input(
+            shape=(self.max_history_length, 1), dtype="int32"
+        )
+
+        # Candidate Inputs
+        cand_tokens_input_score = tf.keras.Input(shape=(1, self.max_title_length), dtype="int32")
+        cand_abstract_tokens_input_score = tf.keras.Input(
+            shape=(1, self.max_abstract_length), dtype="int32"
+        )
+        cand_category_input_score = tf.keras.Input(shape=(1, 1), dtype="int32")
+        cand_subcategory_input_score = tf.keras.Input(shape=(1, 1), dtype="int32")
+
+        history_concat_score = layers.Concatenate(axis=-1)(
+            [
+                hist_tokens_input_score,
+                hist_abstract_tokens_input_score,
+                hist_category_input_score,
+                hist_subcategory_input_score,
+            ]
+        )
+        candidate_concat_score = layers.Concatenate(axis=-1)(
+            [
+                cand_tokens_input_score,
+                cand_abstract_tokens_input_score,
+                cand_category_input_score,
+                cand_subcategory_input_score,
+            ]
+        )
+        candidate_concat_score = layers.Reshape((-1,))(candidate_concat_score)
+
+        # --- Scorer Model Graph ---
+        user_representation_score = self.userencoder(history_concat_score)
+        single_candidate_representation_score = self.newsencoder(candidate_concat_score)
+
+        pred_score = layers.Dot(axes=-1, name="dot_product_score")(
+            [single_candidate_representation_score, user_representation_score]
+        )
+        pred_score = layers.Activation("sigmoid", name="sigmoid_activation_score")(pred_score)
+
+        scorer_model = tf.keras.Model(
+            inputs=[history_concat_score, candidate_concat_score],
+            outputs=pred_score,
+            name="naml_scorer_model",
+        )
+
+        return training_model, scorer_model
 
     def call(self, inputs: Dict[str, tf.Tensor], training: Optional[bool] = None) -> tf.Tensor:
-        """Process news article inputs through the multi-view encoder.
-
-        Args:
-            inputs: Dictionary containing:
-                - title_tokens: Tokenized title
-                - abstract_tokens: Tokenized abstract
-                - category_id: Category index
-                - subcategory_id: Subcategory index
-            training: Whether the layer is being called in training mode
-
-        Returns:
-            News article representation vector
-        """
-        # Process title
-        title_tokens = inputs["title_tokens"]
-        title_embedded = self.word_embedding_layer(title_tokens)
-        title_conv = self.title_cnn(title_embedded)
-        title_vector = self.title_word_attention(title_conv, training=training)
-
-        # Process abstract
-        abstract_tokens = inputs["abstract_tokens"]
-        abstract_embedded = self.word_embedding_layer(abstract_tokens)
-        abstract_conv = self.abstract_cnn(abstract_embedded)
-        abstract_vector = self.abstract_word_attention(abstract_conv, training=training)
-
-        # Process category
-        category_ids = inputs["category_id"]
-        if len(category_ids.shape) == 2 and category_ids.shape[1] == 1:
-            category_ids = tf.squeeze(category_ids, axis=1)
-        category_embedded = self.category_embedding_layer(category_ids)
-        category_vector = self.category_projection(category_embedded)
-
-        # Process subcategory
-        subcategory_ids = inputs["subcategory_id"]
-        if len(subcategory_ids.shape) == 2 and subcategory_ids.shape[1] == 1:
-            subcategory_ids = tf.squeeze(subcategory_ids, axis=1)
-        subcategory_embedded = self.subcategory_embedding_layer(subcategory_ids)
-        subcategory_vector = self.subcategory_projection(subcategory_embedded)
-
-        # Combine all views
-        stacked_views = tf.stack(
-            [title_vector, abstract_vector, category_vector, subcategory_vector], axis=1
-        )
-        attended_views = self.view_attention(stacked_views, training=training)
-
-        # Final processing
-        dense1_output = self.final_dense1(attended_views)
-        dropout_output = self.dropout_layer(dense1_output, training=training)
-
-        return self.final_dense2(dropout_output)
-
-
-class UserEncoder(layers.Layer):
-    """Encodes user's news browsing history into a single vector representation.
-
-    The encoder processes a sequence of news vectors (from NewsEncoder) representing
-    the user's click history through:
-    1. Multi-head self-attention to capture contextual relationships between news articles
-    2. Additive attention to select the most relevant news articles for the final user representation
-
-    Args:
-        user_num_attention_heads: Number of attention heads
-        user_attention_query_dim: Dimension of attention query vector
-        dropout_rate: Dropout rate
-        news_embedding_dim: Dimension of input news vectors
-    """
-
-    def __init__(
-        self,
-        user_num_attention_heads: int,
-        user_attention_query_dim: int,
-        dropout_rate: float,
-        news_embedding_dim: int,
-        name: str = "naml_user_encoder",
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(name=name, **kwargs)
-
-        self.news_embedding_dim = news_embedding_dim
-        self.user_num_attention_heads = user_num_attention_heads
-
-        # Validate dimensions
-        if news_embedding_dim % user_num_attention_heads != 0:
-            raise ValueError(
-                f"news_embedding_dim ({news_embedding_dim}) must be divisible by "
-                f"user_num_attention_heads ({user_num_attention_heads}) for MultiHeadAttention."
-            )
-        head_size = news_embedding_dim // user_num_attention_heads
-
-        # Multi-head self-attention for news sequence
-        self.multihead_attention = layers.MultiHeadAttention(
-            num_heads=user_num_attention_heads,
-            key_dim=head_size,
-            dropout=dropout_rate,
-            name="user_multihead_attention",
-        )
-
-        # Additive attention for final user representation
-        self.additive_attention = AdditiveSelfAttention(
-            query_vector_dim=user_attention_query_dim,
-            dropout=dropout_rate,
-            name="user_additive_attention",
-        )
-
-    def call(self, news_vectors: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
-        """Process sequence of news vectors to create user representation.
-
-        Args:
-            news_vectors: Tensor of shape (batch_size, history_length, news_embedding_dim)
-                containing news article vectors from user's history
-            training: Whether the layer is being called in training mode
-
-        Returns:
-            User representation vector
-        """
-        # Apply multi-head self-attention to capture contextual relationships
-        multihead_attended_news = self.multihead_attention(
-            query=news_vectors, value=news_vectors, key=news_vectors, training=training
-        )
-
-        # Apply additive attention to get final user representation
-        return self.additive_attention(multihead_attended_news, training=training)
-
-
-class ClickPredictor(layers.Layer):
-    """Predicts click probability based on user and news vectors.
-
-    The predictor computes the dot product between user and news vectors,
-    followed by a softmax activation to get click probabilities.
-
-    Args:
-        name: Layer name
-    """
-
-    def __init__(self, name: str = "click_predictor", **kwargs: Any) -> None:
-        super().__init__(name=name, **kwargs)
-
-    def call(
-        self,
-        user_vector: tf.Tensor,
-        candidate_news_vector: tf.Tensor,
-    ) -> tf.Tensor:
-        """Compute click probability for each candidate news article.
-
-        Args:
-            user_vector: Tensor of shape (batch_size, embedding_dim)
-                containing user representation
-            candidate_news_vector: Tensor of shape (batch_size, num_candidates, embedding_dim)
-                containing candidate news article representations
-
-        Returns:
-            Click probability for each candidate news article
-        """
-        # Compute dot product between user vector and each candidate news vector
-        scores = tf.matmul(candidate_news_vector, tf.expand_dims(user_vector, axis=-1))
-        scores = tf.squeeze(scores, axis=-1)
-
-        # Apply softmax to get click probabilities
-        return tf.nn.softmax(scores, axis=-1)
-
-
-class NAML(BaseNewsRecommender):
-    """Neural Attentive Multi-View Learning (NAML) model for news recommendation.
-
-    NAML processes news articles through multiple views (title, abstract, category, subcategory)
-    and uses attention mechanisms to learn user preferences. The model consists of:
-    1. NewsEncoder: Processes each view of a news article and combines them with attention
-    2. UserEncoder: Processes user's click history using multi-head attention
-    3. Click prediction using dot product and softmax/sigmoid activation
-
-    Args:
-        word_embedding_dim: Dimension of word embeddings
-        category_embedding_dim: Dimension of category embeddings
-        subcategory_embedding_dim: Dimension of subcategory embeddings
-        num_filters: Number of CNN filters
-        window_sizes: List of CNN window sizes
-        news_num_attention_heads: Number of attention heads for news encoder
-        news_attention_query_dim: Dimension of attention query vector for news encoder
-        user_num_attention_heads: Number of attention heads for user encoder
-        user_attention_query_dim: Dimension of attention query vector for user encoder
-        dropout_rate: Dropout rate
-        name: Model name
-    """
-
-    def __init__(
-        self,
-        word_embedding_dim: int,
-        category_embedding_dim: int,
-        sub_category_embedding_dim: int,
-        num_categories: int,
-        num_subcategories: int,
-        num_filters: int,
-        window_sizes: List[int],
-        news_attention_query_dim: int,
-        user_num_attention_heads: int,
-        user_attention_query_dim: int,
-        dropout_rate: float,
-        name: str = "naml",
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(name=name, **kwargs)
-
-        # News encoder processes each view and combines them
-        self.news_encoder = NewsEncoder(
-            word_embedding_dim=word_embedding_dim,
-            category_embedding_dim=category_embedding_dim,
-            sub_category_embedding_dim=sub_category_embedding_dim,
-            num_categories=num_categories,
-            num_subcategories=num_subcategories,
-            cnn_filter_num=num_filters,
-            cnn_kernel_size=window_sizes[0],
-            word_attention_query_dim=news_attention_query_dim,
-            view_attention_query_dim=news_attention_query_dim,
-            news_encoder_dense_units=128,
-            dropout_rate=dropout_rate,
-            news_embedding_dim=word_embedding_dim,
-        )
-
-        # User encoder processes click history
-        self.user_encoder = UserEncoder(
-            user_num_attention_heads=user_num_attention_heads,
-            user_attention_query_dim=user_attention_query_dim,
-            dropout_rate=dropout_rate,
-            news_embedding_dim=word_embedding_dim,  # News vectors have same dim as word embeddings
-        )
-
-        # Build both models
-        self.model, self.scorer = self._build_model()
-
-    def _build_model(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
-        """Build both the training model and the scorer model."""
-        # Create input layers for history
-        history_title_input = tf.keras.Input(
-            shape=(None, None),  # (history_length, title_length)
-            dtype="int32",
-            name="history_title_input",
-        )
-        history_abstract_input = tf.keras.Input(
-            shape=(None, None),  # (history_length, abstract_length)
-            dtype="int32",
-            name="history_abstract_input",
-        )
-        history_category_input = tf.keras.Input(
-            shape=(None,),  # (history_length,)
-            dtype="int32",
-            name="history_category_input",
-        )
-        history_subcategory_input = tf.keras.Input(
-            shape=(None,),  # (history_length,)
-            dtype="int32",
-            name="history_subcategory_input",
-        )
-
-        # Input for training (multiple candidates)
-        candidate_title_input = tf.keras.Input(
-            shape=(None, None),  # (num_candidates, title_length)
-            dtype="int32",
-            name="candidate_title_input",
-        )
-        candidate_abstract_input = tf.keras.Input(
-            shape=(None, None),  # (num_candidates, abstract_length)
-            dtype="int32",
-            name="candidate_abstract_input",
-        )
-        candidate_category_input = tf.keras.Input(
-            shape=(None,),  # (num_candidates,)
-            dtype="int32",
-            name="candidate_category_input",
-        )
-        candidate_subcategory_input = tf.keras.Input(
-            shape=(None,),  # (num_candidates,)
-            dtype="int32",
-            name="candidate_subcategory_input",
-        )
-
-        # Input for scoring (single candidate)
-        candidate_one_title_input = tf.keras.Input(
-            shape=(1, None),  # (1, title_length)
-            dtype="int32",
-            name="candidate_one_title_input",
-        )
-        candidate_one_abstract_input = tf.keras.Input(
-            shape=(1, None),  # (1, abstract_length)
-            dtype="int32",
-            name="candidate_one_abstract_input",
-        )
-        candidate_one_category_input = tf.keras.Input(
-            shape=(1,),  # (1,)
-            dtype="int32",
-            name="candidate_one_category_input",
-        )
-        candidate_one_subcategory_input = tf.keras.Input(
-            shape=(1,),  # (1,)
-            dtype="int32",
-            name="candidate_one_subcategory_input",
-        )
-
-        # Process user history
-        history_news_vectors = tf.keras.layers.TimeDistributed(self.news_encoder)(
-            {
-                "title_tokens": history_title_input,
-                "abstract_tokens": history_abstract_input,
-                "category_id": history_category_input,
-                "subcategory_id": history_subcategory_input,
-            }
-        )
-        user_vector = self.user_encoder(history_news_vectors)
-
-        # Training model: process multiple candidates
-        candidate_news_vectors = tf.keras.layers.TimeDistributed(self.news_encoder)(
-            {
-                "title_tokens": candidate_title_input,
-                "abstract_tokens": candidate_abstract_input,
-                "category_id": candidate_category_input,
-                "subcategory_id": candidate_subcategory_input,
-            }
-        )
-
-        # Use dot product and softmax for training multiple candidates
-        dot_product = tf.keras.layers.Dot(axes=-1)([candidate_news_vectors, user_vector])
-        pred_scores = tf.keras.layers.Activation("softmax")(dot_product)
-
-        # Scorer model: process single candidate
-        candidate_one_news_vector = self.news_encoder(
-            {
-                "title_tokens": tf.squeeze(candidate_one_title_input, axis=1),
-                "abstract_tokens": tf.squeeze(candidate_one_abstract_input, axis=1),
-                "category_id": tf.squeeze(candidate_one_category_input, axis=1),
-                "subcategory_id": tf.squeeze(candidate_one_subcategory_input, axis=1),
-            }
-        )
-
-        # Use dot product and sigmoid for scoring single candidate
-        dot_product_one = tf.keras.layers.Dot(axes=-1)([candidate_one_news_vector, user_vector])
-        pred_one_score = tf.keras.layers.Activation("sigmoid")(dot_product_one)
-
-        # Create models
-        model = tf.keras.Model(
-            inputs=[
-                history_title_input,
-                history_abstract_input,
-                history_category_input,
-                history_subcategory_input,
-                candidate_title_input,
-                candidate_abstract_input,
-                candidate_category_input,
-                candidate_subcategory_input,
-            ],
-            outputs=pred_scores,
-            name="naml_model",
-        )
-
-        scorer = tf.keras.Model(
-            inputs=[
-                history_title_input,
-                history_abstract_input,
-                history_category_input,
-                history_subcategory_input,
-                candidate_one_title_input,
-                candidate_one_abstract_input,
-                candidate_one_category_input,
-                candidate_one_subcategory_input,
-            ],
-            outputs=pred_one_score,
-            name="naml_scorer",
-        )
-
-        return model, scorer
-
-    def call(self, inputs: Dict[str, tf.Tensor], training: bool = True) -> tf.Tensor:
-        """Forward pass using the appropriate model."""
-        # Adapt input keys to match model expectations
-        adapted_inputs = {
-            "history_title_input": inputs["history_news_title"],
-            "history_abstract_input": inputs["history_news_abstract"],
-            "history_category_input": inputs["history_news_category"],
-            "history_subcategory_input": inputs["history_news_subcategory"],
-        } | (
-            {
-                "candidate_title_input": inputs["candidate_news_title"],
-                "candidate_abstract_input": inputs["candidate_news_abstract"],
-                "candidate_category_input": inputs["candidate_news_category"],
-                "candidate_subcategory_input": inputs["candidate_news_subcategory"],
-            }
-            if training
-            else {}
-        )
-
+        # Training mode - use training model
         if training:
-            return self.model(adapted_inputs)
+            return self._handle_training(inputs)
 
-        # For validation/testing, reshape inputs for scoring
-        adapted_inputs = self._reshape_for_scoring(inputs)
-        scores = self.scorer(adapted_inputs)
+        # Inference mode - use scorer model
+        return self._handle_inference(inputs)
 
-        # Reshape scores to match expected output shape
-        num_candidates = inputs["candidate_news_title"].shape[1]
-        return self._reshape_scores(scores, num_candidates)
+    def _handle_training(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+        """Handle the forward pass during training mode.
+
+        This method processes inputs for the training model, which expects a list of two tensors:
+        [history_tokens, candidate_tokens]. The training model outputs probabilities for each
+        candidate in the batch.
+
+        Args:
+            inputs (dict): Dictionary containing:
+                - 'hist_tokens': User history tokens, shape (batch_size, history_len, title_len)
+                - 'cand_tokens': Candidate news tokens, shape (batch_size, num_candidates, title_len)
+                - 'hist_abstract_tokens': User history abstract tokens
+                - 'cand_abstract_tokens': Candidate news abstract tokens
+                - 'hist_category': User history categories
+                - 'cand_category': Candidate news categories
+                - 'hist_subcategory': User history subcategories
+                - 'cand_subcategory': Candidate news subcategories
+
+        Returns:
+            tf.Tensor: Softmax probabilities for each candidate
+                Shape: (batch_size, num_candidates)
+        """
+        # Get input tensors
+        hist_title_tokens = inputs["hist_tokens"]
+        hist_abstract_tokens = inputs["hist_abstract_tokens"]
+        hist_category = inputs["hist_category"]
+        hist_subcategory = inputs["hist_subcategory"]
+        cand_title_tokens = inputs["cand_tokens"]
+        cand_abstract_tokens = inputs["cand_abstract_tokens"]
+        cand_category = inputs["cand_category"]
+        cand_subcategory = inputs["cand_subcategory"]
+
+        # Reshape category and subcategory tensors to match the expected input shape
+        hist_category = tf.expand_dims(hist_category, axis=-1)
+        hist_subcategory = tf.expand_dims(hist_subcategory, axis=-1)
+        cand_category = tf.expand_dims(cand_category, axis=-1)
+        cand_subcategory = tf.expand_dims(cand_subcategory, axis=-1)
+
+        # Concatenate features for history
+        hist_features = tf.concat(
+            [hist_title_tokens, hist_abstract_tokens, hist_category, hist_subcategory], axis=-1
+        )
+
+        # Concatenate features for candidates
+        cand_features = tf.concat(
+            [cand_title_tokens, cand_abstract_tokens, cand_category, cand_subcategory], axis=-1
+        )
+
+        return self.training_model(
+            [hist_features, cand_features],
+            training=True,
+        )
+
+    def _handle_inference(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+        if "candidate_news_tokens" in inputs:
+            # Check if it's a single candidate or multiple
+            candidate_shape = tf.shape(inputs["candidate_news_tokens"])
+            if len(candidate_shape) == 2:  # Single candidate: (batch_size, title_len)
+                return self.scorer_model(inputs, training=False)
+            else:  # Multiple candidates
+                return self._score_multiple_candidates(inputs)
+
+        raise ValueError(
+            "Invalid input format for NAML inference. Expected 'candidate_news_tokens'"
+        )
+
+    def _score_multiple_candidates(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+        """Scores multiple candidates for each history in the batch by iterating."""
+        history_batch = {k: v for k, v in inputs.items() if k.startswith("history_")}
+        candidates_batch = {k: v for k, v in inputs.items() if k.startswith("candidate_")}
+
+        batch_size = tf.shape(next(iter(history_batch.values())))[0]
+        num_candidates = tf.shape(next(iter(candidates_batch.values())))[1]
+
+        all_scores = []
+        for i in tf.range(batch_size):
+            current_history = {k: tf.expand_dims(v[i], 0) for k, v in history_batch.items()}
+
+            candidate_scores = []
+            for j in tf.range(num_candidates):
+                current_candidate = {k: v[i, j] for k, v in candidates_batch.items()}
+                score = self.scorer_model({**current_history, **current_candidate})
+                candidate_scores.append(score)
+
+            item_scores = tf.concat(candidate_scores, axis=1)
+            all_scores.append(item_scores)
+
+        return tf.concat(all_scores, axis=0)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update(
+            {
+                "max_title_length": self.max_title_length,
+                "max_abstract_length": self.max_abstract_length,
+                "embedding_size": self.embedding_size,
+                "category_embedding_dim": self.category_embedding_dim,
+                "subcategory_embedding_dim": self.subcategory_embedding_dim,
+                "cnn_filter_num": self.cnn_filter_num,
+                "cnn_kernel_size": self.cnn_kernel_size,
+                "word_attention_dim": self.word_attention_dim,
+                "view_attention_dim": self.view_attention_dim,
+                "user_num_attention_heads": self.user_num_attention_heads,
+                "user_attention_hidden_dim": self.user_attention_hidden_dim,
+                "dropout_rate": self.dropout_rate,
+                "seed": self.seed,
+                "vocab_size": self.vocab_size,
+                "num_categories": self.num_categories,
+                "num_subcategories": self.num_subcategories,
+            }
+        )
+        return config

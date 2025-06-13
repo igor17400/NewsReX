@@ -9,6 +9,7 @@ defaults:
 
 # Basic configuration (fallback values if not specified in experiment)
 seed: 42
+output_base_dir: "outputs"
 device:
   gpu_ids: [ 0 ] # Use all 4 GPUs
   memory_limit: 1 # Use 100% of each GPU's memory
@@ -47,13 +48,6 @@ metrics:
 
 # Remove or comment out the root level experiment_name since we're using the one in logging
 # experiment_name: None
-
-hydra:
-  run:
-    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
-  sweep:
-    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
-    subdir: ${hydra.job.num}
 
 # Cache configuration
 cache:

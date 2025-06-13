@@ -3,68 +3,75 @@
 defaults:
 - /sampling/base
 - _self_
-- override /model: naml # Changed from nrms
+- override /model: naml
 - override /dataset: mind
 
 # Add seed back at root level
 seed: 42 # Global seed for reproducibility
 
 # Experiment name
-name: "naml_mind_small" # Changed from nrms_mind_small
-description: "NAML model trained on MIND-small dataset" # Changed
+name: "naml_mind_small"
+description: "NAML model trained on MIND-small dataset"
 
-# Dataset specific (can remain similar to NRMS, NAML might need max_abstract_length)
+# Dataset specific
 dataset:
   name: "mind"
   version: "small"
-  max_title_length: 30 # Consistent with NAML paper recommendations
-  max_abstract_length: 100 # NAML uses body/abstract, so specify this
+  max_title_length: 32
+  max_abstract_length: 50
   max_history_length: 50
   use_knowledge_graph: false
   random_train_samples: true
   validation_split_strategy: "random"
+  process_title: true
+  process_abstract: true
+  process_category: true
+  process_subcategory: true
 
-# Model specific parameters for NAML
-# These will override the defaults in configs/model/naml.yaml if specified here
-# Otherwise, the values from configs/model/naml.yaml will be used.
+# Model specific
 model:
-  # word_embedding_dim: 300 # from naml.yaml default
-  # category_embedding_dim: 100 # from naml.yaml default
-  cnn_filter_num: 300 # Example: Override default from naml.yaml if needed
-  # cnn_kernel_size: 3 # from naml.yaml default
-  # word_attention_query_dim: 200 # from naml.yaml default
-  # view_attention_query_dim: 200 # from naml.yaml default
-  # news_encoder_dense_units: 200 # from naml.yaml default
-  news_embedding_dim: 250 # Example: Must be divisible by user_num_attention_heads
-  # user_num_attention_heads: 10 # from naml.yaml default, e.g., 250/10 = 25 head_size
-  # user_attention_query_dim: 200 # from naml.yaml default
-  # dropout_rate: 0.2 # from naml.yaml default
-  # seed: 42 # from naml.yaml default
+  embedding_size: 300
+  word_embedding_dim: 300
+  category_embedding_dim: 100
+  cnn_filter_num: 300
+  cnn_kernel_size: 3
+  word_attention_query_dim: 200
+  view_attention_query_dim: 200
+  news_encoder_dense_units: 200
+  news_embedding_dim: 250
+  user_num_attention_heads: 10
+  user_attention_query_dim: 200
+  dropout_rate: 0.2
+  seed: 42
+  loss:
+    name: "categorical_crossentropy"
+    from_logits: false
 
-  # Training parameters (can remain similar to NRMS)
+# Training parameters
 train:
-  batch_size: 50 # NAML paper uses 50 for MINDsmall
-  num_epochs: 10 # NAML paper uses 10
-  learning_rate: 0.0001 # NAML paper uses 1e-4
-  early_stopping_patience: 3 # NAML paper uses 3
-  model_dir: "./saved_models/naml/" # Model save directory
+  batch_size: 64
+  num_epochs: 10
+  learning_rate: 0.0001
+  early_stopping:
+    patience: 3
+    metric: ndcg@10
+  model_dir: "./saved_models/naml/"
 
-# Logging (can remain similar)
+# Logging
 logging:
-  enable_wandb: true
+  enable_wandb: false
   project_name: "BTC"
-  experiment_name: "naml_mind_small" # Match experiment name
+  experiment_name: "naml_mind_small"
   log_every_n_steps: 100
 
-# Sampling configuration (can remain similar)
+# Sampling configuration
 sampling:
-  max_impressions_length: 5 # Should match npratio + 1 if used like that, or just num candidates for val/test
+  max_impressions_length: 5
   strategy: "random"
   random:
     replace: false
-  # npratio: 4 # If your data loader for NAML uses NPRatio for negative sampling during training
 
 device:
   gpu_ids: [ 0 ]
-  memory_limit: 2 # NAML might be more memory intensive
+  memory_limit: 2
   mixed_precision: true

@@ -3,6 +3,7 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 import json
+import inspect
 import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional, List, Protocol
@@ -23,37 +24,10 @@ from rich.progress import (
 )
 
 from utils.metrics import NewsRecommenderMetrics
-from utils.io import save_predictions_to_file_fn
+from utils.io import save_predictions_to_file_fn, get_output_run_dir
 
 from tensorflow.keras import mixed_precision
 import numpy as np
-
-
-# --- Define a Protocol for Dataset (especially for fast_evaluate) ---
-# This makes the expected interface for your dataset class explicit.
-class FastEvalDataProvider(Protocol):
-    train_size: int
-    val_size: int
-    test_size: int
-    processed_news: Dict[str, Any]  # For model __init__
-
-    def train_dataloader(self, batch_size: int, shuffle: bool = True) -> tf.data.Dataset: ...
-    def val_dataloader(self, batch_size: int) -> tf.data.Dataset: ...
-    def test_dataloader(self, batch_size: int) -> tf.data.Dataset: ...
-
-    # For NRMS.fast_evaluate
-    def get_all_news_title_tokens(self) -> np.ndarray: ...  # Shape: (total_news, title_size)
-    def get_all_user_history_tokens(
-        self,
-    ) -> np.ndarray: ...  # Shape: (total_users_in_eval, hist_size, title_size)
-    def get_num_impressions(self, mode: str = "val") -> int: ...  # mode can be "val" or "test"
-
-    # Yields: (imp_id:str, user_idx:int, candidate_news_indices:List[int], labels_for_impression:np.ndarray)
-    def get_impression_iterator(self, mode: str = "val") -> Any: ...
-
-    # Optional: direct access to pre-structured data for fast_evaluate, if not using iterators
-    val_behaviors_data: Dict[str, Any]  # If NRMS.fast_evaluate uses this directly
-    test_behaviors_data: Dict[str, Any]
 
 
 # Initialize Rich Console (can be done once globally)
@@ -67,7 +41,7 @@ def setup_wandb_session(cfg: DictConfig) -> None:  # Renamed to avoid conflict
     if cfg.logging.enable_wandb:
         run_name = (
             cfg.logging.experiment_name
-            or f"nrms_run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            or f"{cfg.model.name}_run_{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
         )
         try:
             wandb.init(
@@ -136,55 +110,50 @@ def test_step_fn(
     return batch_metrics
 
 
-def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, FastEvalDataProvider]:
-    """Instantiate dataset and NRMS model based on Hydra configuration."""
+def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
+    """Instantiate dataset and model based on Hydra configuration."""
     console.log("Initializing dataset provider...")
-    # Dataset instantiation - ensure it matches FastEvalDataProvider protocol if fast_eval is used.
-    dataset_provider: FastEvalDataProvider = hydra.utils.instantiate(cfg.dataset, mode="train")
-
-    console.log("Initializing NRMS model...")
+    dataset_provider: Any = hydra.utils.instantiate(cfg.dataset, mode="train")
     processed_news_data = dataset_provider.processed_news
 
-    nrms_model_params = {
-        "word_embeddings_matrix": processed_news_data["embeddings"],
-        "vocab_size": processed_news_data["vocab_size"],
-        "embedding_dim": cfg.model.embedding_size,
-        "history_size": cfg.dataset.max_history_length,
-        "title_size": cfg.dataset.max_title_length,
-        "num_attention_heads": cfg.model.multiheads,
-        "head_dim": cfg.model.head_dim,
-        "attention_hidden_dim": cfg.model.attention_hidden_dim,
-        "dropout_rate": cfg.model.dropout_rate,
-        "seed": cfg.seed,
-        "processed_news": processed_news_data,
-    }
-    # Filter out any None values to allow model defaults if specific params are not in cfg
-    nrms_model_params = {k: v for k, v in nrms_model_params.items() if v is not None}
+    console.log(f"Initializing model: {cfg.model._target_}...")
 
-    nrms_model: tf.keras.Model = hydra.utils.instantiate(
-        {
-            "_target_": cfg.model._target_,
-            "processed_news": processed_news_data,
-            "embedding_size": cfg.model.embedding_size,
-            "multiheads": cfg.model.multiheads,
-            "head_dim": cfg.model.head_dim,
-            "attention_hidden_dim": cfg.model.attention_hidden_dim,
-            "dropout_rate": cfg.model.dropout_rate,
-            "seed": cfg.seed,
-            # Add any other arguments your NRMS __init__ expects
-        },
-        _recursive_=False,
-    )
+    # --- Generic Model Instantiation ---
+    model_class = hydra.utils.get_class(cfg.model._target_)
+    model_signature = inspect.signature(model_class.__init__)
 
-    if hasattr(nrms_model, "training_model") and nrms_model.training_model is not None:
-        console.log("[bold cyan]Summary of NRMS Training Model (internal):[/bold cyan]")
-        nrms_model.training_model.summary(print_fn=lambda s: console.log(s))
-    if hasattr(nrms_model, "scorer_model") and nrms_model.scorer_model is not None:
-        console.log("[bold cyan]Summary of NRMS Scorer Model (internal):[/bold cyan]")
-        nrms_model.scorer_model.summary(print_fn=lambda s: console.log(s))
+    # Start with parameters from the model's config section
+    model_params = OmegaConf.to_container(cfg.model, resolve=True)
+    # Remove hydra's target, it's not a model parameter
+    model_params.pop("_target_", None)
 
-    console.log("[bold cyan]Summary of NRMS Model (main wrapper):[/bold cyan]")
-    nrms_model.summary(print_fn=lambda s: console.log(s))
+    # Add parameters that are required by the model but are not in its specific config section
+    if "processed_news" in model_signature.parameters:
+        model_params["processed_news"] = processed_news_data
+    if "seed" in model_signature.parameters:
+        model_params["seed"] = cfg.seed
+    if "max_title_length" in model_signature.parameters:
+        model_params["max_title_length"] = cfg.dataset.max_title_length
+    if "max_abstract_length" in model_signature.parameters:
+        model_params["max_abstract_length"] = cfg.dataset.max_abstract_length
+
+    # Filter out any parameters that are not in the model's __init__ signature
+    valid_params = {k: v for k, v in model_params.items() if k in model_signature.parameters}
+
+    model: tf.keras.Model = model_class(**valid_params)
+    # --- End Generic Model Instantiation ---
+
+    console.log(f"Successfully instantiated {model.name} model.")
+
+    if hasattr(model, "training_model") and model.training_model is not None:
+        console.log(f"[bold cyan]Summary of {model.name} Training Model (internal):[/bold cyan]")
+        model.training_model.summary(print_fn=lambda s: console.log(s))
+    if hasattr(model, "scorer_model") and model.scorer_model is not None:
+        console.log(f"[bold cyan]Summary of {model.name} Scorer Model (internal):[/bold cyan]")
+        model.scorer_model.summary(print_fn=lambda s: console.log(s))
+
+    console.log(f"[bold cyan]Summary of {model.name} Model (main wrapper):[/bold cyan]")
+    model.summary(print_fn=lambda s: console.log(s))
 
     optimizer = tf.keras.optimizers.Adam(learning_rate=cfg.train.learning_rate)
     if (
@@ -195,17 +164,15 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, FastE
 
     loss_function = tf.keras.losses.CategoricalCrossentropy(from_logits=False, name="cce_loss")
 
-    compiled_metrics = [tf.keras.metrics.AUC(name="auc")]  # Add more if needed
-
-    nrms_model.compile(optimizer=optimizer, loss=loss_function, metrics=compiled_metrics)
+    model.compile(optimizer=optimizer, loss=loss_function)
     console.log(
-        f"NRMS model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}, Metrics: {[m.name for m in compiled_metrics]}"
+        f"Model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}"
     )
 
     console.log(f"Mixed precision global policy: {tf.keras.mixed_precision.global_policy().name}")
     console.log(f"Optimizer type: {type(optimizer)}")
 
-    return nrms_model, dataset_provider
+    return model, dataset_provider
 
 
 def calculate_num_batches(dataset_size: int, batch_size: int) -> int:
@@ -401,6 +368,7 @@ def update_best_epoch_metrics(
         best_epoch_summary |= {
             "epoch_number": current_epoch_idx + 1,
             "train_loss_at_best": float(current_train_metrics_epoch.get("loss", float("nan"))),
+            "val_loss_at_best": float(current_val_metrics_epoch.get("loss", float("nan"))),
             "comparison_metric_value": current_comparison_metric_val,
             **{f"val_{k}": v for k, v in current_val_metrics_epoch.items()},
         }
@@ -466,12 +434,15 @@ def log_epoch_summary_fn(
     current_epoch_idx: int,
     epoch_train_metrics_results: Dict[str, float],
     epoch_val_metrics_results: Dict[str, float],
+    is_best_epoch: bool,
     wandb_cache: Optional[Dict[str, List[float]]] = None,
 ) -> None:
     """Logs comprehensive summary for an epoch to console and WandB."""
     console.rule(f"[bold magenta]Epoch {current_epoch_idx + 1} Completed[/bold magenta]")
     log_metrics_to_console_fn(epoch_train_metrics_results, "Average Training")
     log_metrics_to_console_fn(epoch_val_metrics_results, "Validation")
+    if is_best_epoch:
+        console.log("[bold green]✨ New best epoch based on validation metric! ✨[/bold green]")
     console.rule()
 
     if wandb.run and wandb_cache is not None:
@@ -483,7 +454,7 @@ def log_epoch_summary_fn(
 
 def _run_initial_validation(
     model: tf.keras.Model,
-    dataset_provider: FastEvalDataProvider,
+    dataset_provider: Any,
     custom_metrics_engine: NewsRecommenderMetrics,
     progress_bar_manager: Progress,
     cfg: DictConfig,
@@ -494,22 +465,20 @@ def _run_initial_validation(
 
     console.log("[bold yellow]Running Initial Validation (before training starts)...[/bold yellow]")
 
-    # Create mode-specific directory for predictions using Hydra's output directory
-    if hydra.core.hydra_config.HydraConfig.initialized():
-        output_run_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
-        predictions_save_dir = output_run_dir / "predictions" / "initial_val"
-        if cfg.eval.save_predictions:
-            predictions_save_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        predictions_save_dir = None
+    # Setup output directory based on Hydra's current run path
+    output_run_dir = get_output_run_dir(cfg)
+    predictions_save_dir = output_run_dir / "predictions" / "initial_val"
+    
+    if cfg.eval.save_predictions:
+        predictions_save_dir.mkdir(parents=True, exist_ok=True)
 
     if cfg.eval.fast_evaluation:
         metrics = model.fast_evaluate(
-            behaviors_data=dataset_provider.val_behaviors_data,
-            processed_news=dataset_provider.processed_news,
+            user_hist_dataloader=dataset_provider.user_history_dataloader(mode="val"),
+            impression_iterator=dataset_provider.impression_dataloader(mode="val"),
+            news_dataloader=dataset_provider.news_dataloader(),
             metrics_calculator=custom_metrics_engine,
             progress=progress_bar_manager,
-            batch_size_eval=cfg.eval.batch_size,
             mode="initial_val",
             save_predictions_path=predictions_save_dir if cfg.eval.save_predictions else None,
             epoch=None,
@@ -531,7 +500,7 @@ def _run_initial_validation(
 
 def _run_epoch_evaluation(
     model: tf.keras.Model,
-    dataset_provider: FastEvalDataProvider,
+    dataset_provider: Any,
     custom_metrics_engine: NewsRecommenderMetrics,
     progress_bar_manager: Progress,
     cfg: DictConfig,
@@ -575,7 +544,7 @@ def _run_epoch_evaluation(
 
 def _run_final_testing(
     model: tf.keras.Model,
-    dataset_provider: FastEvalDataProvider,
+    dataset_provider: Any,
     custom_metrics_engine: NewsRecommenderMetrics,
     progress_bar_manager: Progress,
     cfg: DictConfig,
@@ -623,54 +592,9 @@ def _run_final_testing(
     )
 
 
-def _handle_model_saving_and_early_stopping(
-    model: tf.keras.Model,
-    epoch_idx: int,
-    current_metrics: Dict[str, float],
-    best_metrics: Dict[str, Any],
-    patience_countdown: int,
-    cfg: DictConfig,
-    best_model_path: Path,
-    last_model_path: Path,
-) -> Tuple[bool, int]:
-    """Handle model saving and early stopping logic.
-
-    Returns:
-        Tuple of (should_stop, new_patience_countdown)
-    """
-    model.save_weights(str(last_model_path))
-    current_metric_val = get_main_comparison_metric(
-        current_metrics, cfg.train.early_stopping.metric
-    )
-
-    if update_best_epoch_metrics(
-        best_metrics,
-        epoch_idx,
-        current_metrics,
-        current_metrics,
-        current_metric_val,
-    ):
-        console.log(
-            f"[bold green]Validation metric '{cfg.train.early_stopping.metric}' improved to {current_metric_val:.4f}. Saving best model weights.[/bold green]"
-        )
-        model.save_weights(str(best_model_path))
-        return False, cfg.train.early_stopping.patience
-
-    new_patience = patience_countdown - 1
-    console.log(
-        f"[yellow]Validation metric '{cfg.train.early_stopping.metric}' did not improve from {best_metrics.get('comparison_metric_value', -float('inf')):.4f}. Patience: {new_patience}/{cfg.train.early_stopping.patience}[/yellow]"
-    )
-
-    if new_patience <= 0:
-        console.log(f"[bold red]Early stopping triggered after epoch {epoch_idx + 1}.[/bold red]")
-        return True, new_patience
-
-    return False, new_patience
-
-
 def training_loop_orchestrator(
     model: tf.keras.Model,
-    dataset_provider: FastEvalDataProvider,
+    dataset_provider: Any,
     cfg: DictConfig,
     custom_metrics_engine: NewsRecommenderMetrics,
     progress_bar_manager: Progress,
@@ -685,8 +609,8 @@ def training_loop_orchestrator(
     # Setup directories
     models_save_dir = output_directory / "models"
     models_save_dir.mkdir(parents=True, exist_ok=True)
-    best_model_weights_filepath = models_save_dir / "nrms_best.weights.h5"
-    last_model_weights_filepath = models_save_dir / "nrms_last.weights.h5"
+    best_model_weights_filepath = models_save_dir / f"{model.name}_best.weights.h5"
+    last_model_weights_filepath = models_save_dir / f"{model.name}_last.weights.h5"
     predictions_save_dir = output_directory / "predictions"
     predictions_save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -702,6 +626,9 @@ def training_loop_orchestrator(
         )
 
     # Main training loop
+    console.log("[bold]Starting training loop...[/bold]")
+    dataloader_train = dataset_provider.train_dataloader(batch_size=cfg.train.batch_size)
+
     overall_training_task = progress_bar_manager.add_task(
         "Overall Training Progress", total=cfg.train.num_epochs
     )
@@ -715,7 +642,7 @@ def training_loop_orchestrator(
         # Training
         final_train_metrics_epoch = train_epoch_fn(
             model,
-            dataset_provider.train_dataloader(batch_size=cfg.train.batch_size),
+            dataloader_train,
             num_train_batches,
             progress_bar_manager,
             cfg.logging.log_every_n_steps,
@@ -733,23 +660,45 @@ def training_loop_orchestrator(
             predictions_save_dir,
         )
 
-        log_epoch_summary_fn(
-            epoch_idx, final_train_metrics_epoch, final_val_metrics_epoch, wandb_local_history
-        )
-
         # Model saving & early stopping
-        should_stop, patience_countdown = _handle_model_saving_and_early_stopping(
-            model,
-            epoch_idx,
-            final_val_metrics_epoch,
+        # This part needs the current epoch's training and validation metrics
+        current_metric_val = get_main_comparison_metric(
+            final_val_metrics_epoch, cfg.train.early_stopping.metric
+        )
+        is_new_best = update_best_epoch_metrics(
             best_epoch_metrics_tracking,
-            patience_countdown,
-            cfg,
-            best_model_weights_filepath,
-            last_model_weights_filepath,
+            epoch_idx,
+            final_train_metrics_epoch,  # Pass training metrics
+            final_val_metrics_epoch,  # Pass validation metrics
+            current_metric_val,
         )
 
-        if should_stop:
+        log_epoch_summary_fn(
+            epoch_idx,
+            final_train_metrics_epoch,
+            final_val_metrics_epoch,
+            is_new_best,
+            wandb_local_history,
+        )
+
+        if is_new_best:
+            console.log(
+                f"[bold green]Validation metric '{cfg.train.early_stopping.metric}' improved to {current_metric_val:.4f}. Saving best model weights.[/bold green]"
+            )
+            model.save_weights(str(best_model_weights_filepath))
+            patience_countdown = cfg.train.early_stopping.patience
+        else:
+            patience_countdown -= 1
+            console.log(
+                f"[yellow]Validation metric '{cfg.train.early_stopping.metric}' did not improve from {best_epoch_metrics_tracking.get('comparison_metric_value', -float('inf')):.4f}. Patience: {patience_countdown}/{cfg.train.early_stopping.patience}[/yellow]"
+            )
+
+        model.save_weights(str(last_model_weights_filepath))
+
+        if patience_countdown <= 0:
+            console.log(
+                f"[bold red]Early stopping triggered after epoch {epoch_idx + 1}.[/bold red]"
+            )
             break
 
         progress_bar_manager.update(overall_training_task, advance=1)
@@ -757,17 +706,21 @@ def training_loop_orchestrator(
     progress_bar_manager.remove_task(overall_training_task)
 
     # Final testing
-    final_test_metrics_results = _run_final_testing(
-        model,
-        dataset_provider,
-        custom_metrics_engine,
-        progress_bar_manager,
-        cfg,
-        best_model_weights_filepath,
-        last_model_weights_filepath,
-        best_epoch_metrics_tracking,
-        predictions_save_dir,
-    )
+    if cfg.eval.run_final_testing:
+        final_test_metrics_results = _run_final_testing(
+            model,
+            dataset_provider,
+            custom_metrics_engine,
+            progress_bar_manager,
+            cfg,
+            best_model_weights_filepath,
+            last_model_weights_filepath,
+            best_epoch_metrics_tracking,
+            predictions_save_dir,
+        )
+    else:
+        final_test_metrics_results = None
+        console.log("[yellow]Skipping final testing phase as per configuration.[/yellow]")
 
     if final_test_metrics_results:
         log_metrics_to_console_fn(final_test_metrics_results, "Final Test")
@@ -790,7 +743,9 @@ def training_loop_orchestrator(
 
     if wandb.run:
         wandb.summary["best_epoch"] = best_epoch_metrics_tracking.get("epoch_number")
-        wandb.summary["best_val_metric"] = best_epoch_metrics_tracking.get("comparison_metric_value")
+        wandb.summary["best_val_metric"] = best_epoch_metrics_tracking.get(
+            "comparison_metric_value"
+        )
         for k, v in best_epoch_metrics_tracking.items():
             wandb.summary[f"best/{k}"] = v
         wandb.finish()
@@ -826,16 +781,7 @@ def main_training_entry(cfg: DictConfig) -> None:
     )
 
     # Setup output directory based on Hydra's current run path
-    if hydra.core.hydra_config.HydraConfig.initialized():
-        output_run_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
-    else:  # Fallback if not using Hydra's launcher
-        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        exp_name_for_path = (
-            cfg.logging.experiment_name.replace(" ", "_").lower()
-            if cfg.logging.experiment_name
-            else "nrms_experiment"
-        )
-        output_run_dir = Path(cfg.train.output_base_dir) / exp_name_for_path / f"run_{timestamp}"
+    output_run_dir = get_output_run_dir(cfg)
     output_run_dir.mkdir(parents=True, exist_ok=True)
     console.log(f"All outputs for this run will be saved in: {output_run_dir.resolve()}")
 

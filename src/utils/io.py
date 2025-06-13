@@ -2,12 +2,14 @@ import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from rich.console import Console
+import datetime
+
 
 def save_predictions_to_file_fn(
     predictions_dict: Dict[str, Tuple[List, List]],
     output_dir: Path,
     epoch_idx: Optional[int] = None,
-    mode: str = "val"
+    mode: str = "val",
 ) -> None:
     console = Console()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -23,4 +25,16 @@ def save_predictions_to_file_fn(
             gt_str = json.dumps(gt)
             pred_scores_str = json.dumps(pred_scores)
             f.write(f"{imp_id}\t{gt_str}\t{pred_scores_str}\n")
-    console.log(f"Saved {mode} predictions to {filepath}") 
+    console.log(f"Saved {mode} predictions to {filepath}")
+
+
+def get_output_run_dir(cfg):
+    """
+    Returns the output directory for the current run, creating it if necessary.
+    Structure: <output_base_dir>/<model_name>/<YYYY-MM-DD-HH-MM-SS>/
+    """
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    experiment_name = cfg.name.lower()
+    output_run_dir = Path(cfg.output_base_dir) / experiment_name / f"{timestamp}"
+    output_run_dir.mkdir(parents=True, exist_ok=True)
+    return output_run_dir

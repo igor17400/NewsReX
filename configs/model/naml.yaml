@@ -23,12 +23,3 @@ user_attention_query_dim: 200 # Query vector dim for additive attention in user 
 # Common parameters
 dropout_rate: 0.2
 seed: 42 # Model-specific seed, can be overridden by global seed
-
-# processed_news will be injected by the training script:
-# processed_news:
-#   vocab_size: ???
-#   embeddings: ??? (Optional pre-trained embeddings)
-#   num_categories: ???
-#   num_subcategories: ???
-#   max_title_length: ???
-#   max_abstract_length: ??? (Optional, otherwise defaults to max_title_length)
