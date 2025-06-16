@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.keras import Model
 from tqdm import tqdm
 
-from utils.io import save_predictions_to_file_fn
+from utils.saving import save_predictions_to_file_fn
 from datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
 
 

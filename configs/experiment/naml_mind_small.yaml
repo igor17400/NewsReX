@@ -12,6 +12,7 @@ seed: 42 # Global seed for reproducibility
 # Experiment name
 name: "naml_mind_small"
 description: "NAML model trained on MIND-small dataset"
+model_name: "NAML"
 
 # Dataset specific
 dataset:
@@ -54,7 +55,7 @@ train:
   learning_rate: 0.0001
   early_stopping:
     patience: 3
-    metric: ndcg@10
+    min_improvement: 0.01
   model_dir: "./saved_models/naml/"
 
 # Logging

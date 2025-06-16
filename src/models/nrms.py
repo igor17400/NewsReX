@@ -9,7 +9,7 @@ from .layers import AdditiveSelfAttention
 import numpy as np
 
 # from utils.losses import get_loss # Not used in this file directly
-from utils.io import save_predictions_to_file_fn
+from utils.saving import save_predictions_to_file_fn
 
 
 class SelfAttention(layers.Layer):

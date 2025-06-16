@@ -50,7 +50,7 @@ class MINDDataset(BaseNewsDataset):
         embedding_type: str = "glove",
         embedding_size: int = 300,
         sampling: DictConfig = None,
-        data_fraction_train: float = 1.0,
+        data_fraction_train: float = 0.1,
         data_fraction_val: float = 1.0,
         data_fraction_test: float = 1.0,
         mode: str = "train",
