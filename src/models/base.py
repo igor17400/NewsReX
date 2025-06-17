@@ -1,8 +1,8 @@
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model
-from tqdm import tqdm
+from rich.progress import Progress
 
 from utils.saving import save_predictions_to_file_fn
 from datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
@@ -15,10 +15,15 @@ class BaseModel(Model):
     including methods for fast evaluation using precomputed vectors.
     """
 
+    def __init__(self, name: str = "base_news_recommender"):
+        super().__init__(name=name)
+        policy = tf.keras.mixed_precision.global_policy()
+        self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
+
     def precompute_news_vectors(
         self,
         news_dataloader: NewsBatchDataloader,
-        progress: Any,
+        progress: Progress,
     ) -> Dict[str, np.ndarray]:
         """Precompute vectors for all news articles.
 
@@ -40,11 +45,15 @@ class BaseModel(Model):
             # Convert batch to numpy arrays
             news_ids = batch["news_id"]
             news_features = batch["news_features"]
+            print("--- news_ids ---")
+            print(news_ids[:10])
+            print("--- news_features ---")
+            print(news_features[:10])
 
             batch_vecs = self.newsencoder(news_features, training=False).numpy()
 
             for i, news_id in enumerate(news_ids):
-                news_vecs_dict[str(news_id)] = batch_vecs[i]
+                news_vecs_dict[news_id.numpy().decode("utf-8")] = batch_vecs[i]
 
             progress.update(news_progress, advance=len(news_ids))
 
@@ -52,7 +61,7 @@ class BaseModel(Model):
         return news_vecs_dict
 
     def precompute_user_vectors(
-        self, user_dataloader: UserHistoryBatchDataloader, progress: Optional[tqdm] = None
+        self, user_dataloader: UserHistoryBatchDataloader, progress: Progress
     ) -> Dict[int, np.ndarray]:
         """Pre-compute user vectors for fast evaluation.
 
@@ -88,7 +97,7 @@ class BaseModel(Model):
         news_dataloader,
         impression_iterator,
         metrics_calculator,
-        progress,
+        progress: Progress,
         mode="validate",
         save_predictions_path=None,
         epoch=None,
@@ -96,14 +105,22 @@ class BaseModel(Model):
         """Fast evaluation of the model using precomputed vectors and dataloader iterators."""
         # 1. Precompute news vectors
         news_vecs_dict = self.precompute_news_vectors(news_dataloader, progress)
+        print("--- news vectors ---")
+        print(list(news_vecs_dict.keys())[:10])
+        print(list(news_vecs_dict.values())[:10])
 
         # 2. Precompute user vectors
         user_vecs_dict = self.precompute_user_vectors(user_hist_dataloader, progress)
+        print("--- user vectors ---")
+        print(list(user_vecs_dict.keys())[:10])
+        print(list(user_vecs_dict.values())[:10])
 
         # 3. Score impressions using precomputed user and news vectors
-        group_labels_list = []
-        group_preds_list = []
+        group_labels_list: List[np.ndarray] = []
+        group_preds_list: List[np.ndarray] = []
         predictions_to_save = {}
+        
+        print(bunda)
 
         # Create progress bar for impressions
         impression_progress = progress.add_task(
@@ -121,10 +138,15 @@ class BaseModel(Model):
             news_vectors = []
             for nid in cand_ids_np:
                 news_key = f"N{str(nid)}"
-                news_vectors.append(news_vecs_dict[news_key])
-            
+                vec = news_vecs_dict.get(news_key)
+                if vec is not None:
+                    news_vectors.append(vec)
+
             # Calculate scores using dot product
-            scores = np.dot(np.stack(news_vectors, axis=0), user_vector)
+            if not news_vectors:
+                scores = np.array([])
+            else:
+                scores = np.dot(np.stack(news_vectors, axis=0), user_vector)
 
             group_labels_list.append(labels.numpy())
             group_preds_list.append(scores)
@@ -155,9 +177,31 @@ class BaseModel(Model):
         group_labels_list: List[np.ndarray],
         group_preds_list: List[np.ndarray],
         metrics_calculator: Any,
-        progress: Any,
+        progress: Progress,
     ) -> Dict[str, float]:
-        """Computes final metrics from collected predictions and labels."""
+        """Computes and aggregates metrics from lists of labels and predictions.
+
+        This method iterates through each impression's labels and predicted scores.
+        For each impression, it calculates the loss and various ranking metrics
+        (e.g., AUC, MRR, nDCG) using the provided `metrics_calculator`. It then
+        aggregates these scores to compute the final average metrics over all
+        impressions.
+
+        Args:
+            group_labels_list (List[np.ndarray]): A list of 1D NumPy arrays, where
+                each array contains the ground truth labels (0 or 1) for one impression.
+            group_preds_list (List[np.ndarray]): A list of 1D NumPy arrays, where
+                each array contains the predicted scores (logits) for one impression.
+            metrics_calculator (Any): An object equipped with a `compute_metrics`
+                method that calculates metrics from labels and logits. It should
+                also have a `METRIC_NAMES` attribute.
+            progress (Progress): The progress bar instance, used here to log
+                warnings if invalid values (NaN/Inf) are found in predictions.
+
+        Returns:
+            Dict[str, float]: A dictionary containing the final computed metrics,
+                including the average loss and other metrics like AUC, MRR, etc.
+        """
         val_loss_total = 0.0
         num_valid_impressions_for_loss = 0
         metric_values_agg = {key: [] for key in metrics_calculator.METRIC_NAMES}
@@ -166,13 +210,16 @@ class BaseModel(Model):
             if labels_np.size == 0 or scores_np.size == 0:
                 continue
 
-            labels_tf = tf.constant([labels_np], dtype=tf.float32)
-            scores_tf_logits = tf.constant([scores_np], dtype=tf.float32)
-
-            if self._has_nan_or_inf(scores_tf_logits, labels_tf):
-                progress.console.print("[WARNING fast_evaluate] NaN/Inf detected. Skipping loss.")
+            # Check for NaN/Inf in numpy arrays before any computation
+            if np.isnan(scores_np).any() or np.isinf(scores_np).any():
+                progress.console.print(
+                    "[WARNING fast_evaluate] NaN/Inf detected in scores. Skipping impression."
+                )
                 continue
 
+            # For loss calculation, convert to tensors
+            labels_tf = tf.constant([labels_np], dtype=self.float_dtype)
+            scores_tf_logits = tf.constant([scores_np], dtype=self.float_dtype)
             scores_tf_probs = tf.nn.softmax(scores_tf_logits, axis=-1)
 
             try:
@@ -184,12 +231,12 @@ class BaseModel(Model):
                 progress.console.print(f"[WARNING fast_evaluate] Error calculating loss: {e}.")
 
             impression_metrics = metrics_calculator.compute_metrics(
-                y_true=labels_tf, y_pred_logits=scores_tf_logits
+                y_true=labels_np, y_pred_logits=scores_np
             )
             for metric_name, value in impression_metrics.items():
                 if metric_name in metric_values_agg:
                     metric_values_agg[metric_name].append(float(value))
-
+            
         final_metrics = {
             "loss": (
                 (val_loss_total / num_valid_impressions_for_loss)
@@ -201,10 +248,3 @@ class BaseModel(Model):
             final_metrics[metric_name] = np.mean(values_list) if values_list else 0.0
 
         return final_metrics
-
-    def _has_nan_or_inf(self, *tensors: tf.Tensor) -> bool:
-        """Checks if any tensor in the list contains NaN or Inf values."""
-        for tensor in tensors:
-            if tf.reduce_any(tf.math.is_nan(tensor)) or tf.reduce_any(tf.math.is_inf(tensor)):
-                return True
-        return False

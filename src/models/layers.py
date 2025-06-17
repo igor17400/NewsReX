@@ -73,7 +73,7 @@ class AdditiveSelfAttention(layers.Layer):
         if mask is not None:
             # Apply the mask (set scores of masked items to a very small number before softmax)
             mask = tf.expand_dims(
-                tf.cast(mask, tf.float32), axis=-1
+                tf.cast(mask, self.compute_dtype), axis=-1
             )  # (batch_size, sequence_length, 1)
             attention_scores += mask * -1e9  # Add a large negative number to masked positions
 
@@ -110,9 +110,7 @@ class AdditiveAttentionLayer(layers.Layer):
         seed (int): Random seed for reproducibility. Defaults to 42.
     """
 
-    def __init__(
-        self, attention_dim: int = 200, dropout_rate: float = 0.0, seed: int = 42, **kwargs
-    ):
+    def __init__(self, attention_dim: int = 200, dropout_rate: float = 0.0, seed: int = 42, **kwargs):
         super().__init__(**kwargs)
         self.attention_dim = attention_dim
         self.dropout_rate = dropout_rate
@@ -180,7 +178,7 @@ class AdditiveAttentionLayer(layers.Layer):
 
         if mask is not None:
             # Apply the mask (set scores of masked items to a very small number before softmax)
-            mask = tf.expand_dims(tf.cast(mask, tf.float32), axis=-1)
+            mask = tf.expand_dims(tf.cast(mask, self.compute_dtype), axis=-1)
             attention_scores += mask * -1e9
 
         # Compute attention weights using softmax

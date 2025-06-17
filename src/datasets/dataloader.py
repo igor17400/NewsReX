@@ -1,5 +1,5 @@
 import tensorflow as tf
-from typing import List, Dict, Any
+from typing import List
 import numpy as np
 
 
@@ -39,6 +39,8 @@ class ImpressionIterator:
         self.impression_ids = impression_ids
         self.candidate_ids = candidate_ids
         self.num_impressions = len(labels)
+        policy = tf.keras.mixed_precision.global_policy()
+        self.float_dtype = policy.compute_dtype
 
         self.process_title = process_title
         self.process_abstract = process_abstract
@@ -76,7 +78,7 @@ class ImpressionIterator:
                     tf.concat(impression_features, axis=-1), dtype=tf.int32
                 )
             }
-            labels = tf.constant(self.labels[idx], dtype=tf.float32)
+            labels = tf.constant(self.labels[idx], dtype=self.float_dtype)
             impression_id = tf.constant([self.impression_ids[idx]], dtype=tf.int32)
             candidate_ids = tf.constant([self.candidate_ids[idx]], dtype=tf.int32)
 

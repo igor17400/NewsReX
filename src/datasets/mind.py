@@ -3,7 +3,7 @@ import pickle
 import urllib.request
 import zipfile
 import os
-from typing import Dict, Tuple, List, Optional, Set
+from typing import Dict, Tuple, List, Optional, Set, Any, Union
 import collections
 import json
 import re
@@ -15,6 +15,7 @@ from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 import tensorflow as tf
+from tensorflow import keras
 
 from datasets.base import BaseNewsDataset
 from utils.cache_manager import CacheManager
@@ -46,10 +47,10 @@ class MINDDataset(BaseNewsDataset):
         max_abstract_length: int,
         max_history_length: int,
         max_impressions_length: int,
-        random_seed: int,
+        seed: int,
         embedding_type: str = "glove",
         embedding_size: int = 300,
-        sampling: DictConfig = None,
+        sampling: Optional[DictConfig] = None,
         data_fraction_train: float = 1.0,
         data_fraction_val: float = 1.0,
         data_fraction_test: float = 1.0,
@@ -64,6 +65,8 @@ class MINDDataset(BaseNewsDataset):
         process_abstract: bool = True,
         process_category: bool = True,
         process_subcategory: bool = True,
+        max_entities: int = 1000,
+        max_relations: int = 500,
     ):
         super().__init__()
         self.name = name
@@ -79,7 +82,7 @@ class MINDDataset(BaseNewsDataset):
         self.embedding_type = embedding_type
         self.embedding_size = embedding_size
         self.embeddings_manager = EmbeddingsManager(self.cache_manager)
-        self.sampler = ImpressionSampler(sampling)
+        self.sampler = ImpressionSampler(sampling if sampling is not None else DictConfig({}))
         self.data_fraction_train = data_fraction_train
         self.data_fraction_val = data_fraction_val
         self.data_fraction_test = data_fraction_test
@@ -90,18 +93,22 @@ class MINDDataset(BaseNewsDataset):
         self.process_abstract = process_abstract
         self.process_category = process_category
         self.process_subcategory = process_subcategory
+        policy = keras.mixed_precision.global_policy()
+        self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
 
         # Store validation split parameters
         self.validation_split_strategy = validation_split_strategy
         self.validation_split_percentage = validation_split_percentage
         self.validation_split_seed = (
-            validation_split_seed if validation_split_seed is not None else random_seed
+            validation_split_seed if validation_split_seed is not None else seed
         )
 
         # Knowledge graph related attributes
-        self.entity_embeddings = {}
-        self.context_embeddings = {}
-        self.entity_embedding_relation = collections.defaultdict(set)
+        self.max_entities = max_entities
+        self.max_relations = max_relations
+        self.entity_embeddings: Dict[str, list] = {}
+        self.context_embeddings: Dict[str, list] = {}
+        self.entity_embedding_relation: Dict[str, Set] = collections.defaultdict(set)
 
         logger.info(f"Initializing MIND dataset ({version} version)")
         logger.info(f"Data will be stored in: {self.dataset_path}")
@@ -117,14 +124,10 @@ class MINDDataset(BaseNewsDataset):
         self.test_behaviors_data: Dict[str, tf.Tensor] = {}
 
         # Set random seed
-        np.random.seed(random_seed)
+        np.random.seed(seed)
 
         # Load and process news data (will build vocab and tokenize)
         self.processed_news = self.process_news()
-
-        # Load knowledge graph if enabled
-        if self.use_knowledge_graph:
-            self._process_knowledge_graph()
 
         # Load and process behaviors data
         self._load_data(mode)
@@ -134,7 +137,7 @@ class MINDDataset(BaseNewsDataset):
         """Number of training behaviors"""
         return (
             len(self.train_behaviors_data["impression_ids"])
-            if hasattr(self, "train_behaviors_data")
+            if "impression_ids" in self.train_behaviors_data
             else 0
         )
 
@@ -143,7 +146,7 @@ class MINDDataset(BaseNewsDataset):
         """Number of validation behaviors"""
         return (
             len(self.val_behaviors_data["impression_ids"])
-            if hasattr(self, "val_behaviors_data")
+            if "impression_ids" in self.val_behaviors_data
             else 0
         )
 
@@ -152,7 +155,7 @@ class MINDDataset(BaseNewsDataset):
         """Number of test behaviors"""
         return (
             len(self.test_behaviors_data["impression_ids"])
-            if hasattr(self, "test_behaviors_data")
+            if "impression_ids" in self.test_behaviors_data
             else 0
         )
 
@@ -250,6 +253,10 @@ class MINDDataset(BaseNewsDataset):
                 subset=["id"], keep="first"
             )
             logger.info("All news dataframes joined and duplicates dropped...")
+
+            # Load knowledge graph if enabled
+            if self.use_knowledge_graph:
+                self._process_knowledge_graph(all_news_df)
 
             # Create a mapping from original news string ID to a continuous integer ID for array indexing
             # This is important if news IDs are not continuous or not integers
@@ -429,15 +436,19 @@ class MINDDataset(BaseNewsDataset):
             logger.info("GloVe mean and std calculated successfully.")
 
             logger.info("Creating inital embedding matrix...")
-            embedding_matrix = np.zeros((len(self.vocab), self.embedding_size), dtype=np.float32)
+            embedding_matrix = np.zeros(
+                (len(self.vocab), self.embedding_size), dtype=self.float_dtype.as_numpy_dtype
+            )
 
             # Initialize PAD vector
-            embedding_matrix[self.vocab["[PAD]"]] = np.zeros(self.embedding_size, dtype=np.float32)
+            embedding_matrix[self.vocab["[PAD]"]] = np.zeros(
+                self.embedding_size, dtype=self.float_dtype.as_numpy_dtype
+            )
 
             # Initialize UNK vector
             embedding_matrix[self.vocab["[UNK]"]] = np.random.normal(
                 loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
-            ).astype(np.float32)
+            ).astype(self.float_dtype.as_numpy_dtype)
 
             logger.info(
                 "Making sure <NUM> vector is in the embedding matrix and tf.gather runs on CPU..."
@@ -462,7 +473,7 @@ class MINDDataset(BaseNewsDataset):
                         else:  # Fallback to random
                             embedding_matrix[num_token_id] = np.random.normal(
                                 loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
-                            ).astype(np.float32)
+                            ).astype(self.float_dtype.as_numpy_dtype)
                 logger.info("Initial embedding matrix created successfully.")
 
                 with Progress(
@@ -488,13 +499,13 @@ class MINDDataset(BaseNewsDataset):
                         else:  # Word not in GloVe, initialize randomly
                             embedding_matrix[idx] = np.random.normal(
                                 loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
-                            ).astype(np.float32)
+                            ).astype(self.float_dtype.as_numpy_dtype)
                         progress.advance(task)
 
             np.save(embeddings_file, embedding_matrix)
             logger.info(f"Embedding matrix created successfully and saved to {embeddings_file}")
 
-            processed_news_content = {
+            processed_news_content: Dict[str, Any] = {
                 "news_ids_original_strings": unique_news_ids_str,  # Store the original string IDs
                 "tokens": tokenized_titles_np,
                 "abstract_tokens": tokenized_abstracts_np,
@@ -527,11 +538,11 @@ class MINDDataset(BaseNewsDataset):
         logger.info(f"Loading filtered embeddings (threshold {self.word_threshold})...")
         embedding_matrix_loaded = np.load(embeddings_file)
         processed_news_content["embeddings"] = tf.constant(
-            embedding_matrix_loaded, dtype=tf.float32
+            embedding_matrix_loaded, dtype=self.float_dtype
         )
 
         # This map is used by process_behaviors. It maps original news ID string to tokenized title array
-        self.news_id_str_to_tokens = {
+        self.news_id_str_to_tokens: Dict[str, np.ndarray] = {
             nid_str: processed_news_content["tokens"][self.news_str_id_to_int_idx[nid_str]]
             for nid_str in processed_news_content["news_ids_original_strings"]
         }
@@ -806,23 +817,33 @@ class MINDDataset(BaseNewsDataset):
         else:
             logger.info("Found existing knowledge graph data")
 
-    def process_behaviors(self, behaviors_df: pd.DataFrame, stage: str) -> Dict[str, np.ndarray]:
+    def process_behaviors(
+        self, behaviors_df: pd.DataFrame, stage: str
+    ) -> Dict[str, Union[np.ndarray, list]]:
         """Process behaviors storing only tokens, not embeddings."""
-        histories_news_ids = (
+        histories_news_ids: List[list] = (
             []
         )  # List of news IDs in the history of news articles clicked by the user
-        history_news_tokens = []  # Tokens for each news article in the history
-        history_news_abstract_tokens = []  # Abstract tokens for each news article in the history
-        history_news_categories = []  # Categories for each news article in the history
-        history_news_subcategories = []  # Subcategories for each news article in the history
-        candidate_news_ids = []  # Candidate news IDs for each impression row
-        candidate_news_tokens = []  # Tokens for each candidate news article
-        candidate_news_abstract_tokens = []  # Abstract tokens for each candidate news article
-        candidate_news_categories = []  # Categories for each candidate news article
-        candidate_news_subcategories = []  # Subcategories for each candidate news article
-        labels = []  # Labels for each candidate news article
-        impression_ids = []  # IDs for each impression. That's the row in the behaviors.tsv file
-        user_ids = []  # IDs for each user
+        history_news_tokens: List[list] = []  # Tokens for each news article in the history
+        history_news_abstract_tokens: List[
+            list
+        ] = []  # Abstract tokens for each news article in the history
+        history_news_categories: List[list] = []  # Categories for each news article in the history
+        history_news_subcategories: List[
+            list
+        ] = []  # Subcategories for each news article in the history
+        candidate_news_ids: List[list] = []  # Candidate news IDs for each impression row
+        candidate_news_tokens: List[list] = []  # Tokens for each candidate news article
+        candidate_news_abstract_tokens: List[
+            list
+        ] = []  # Abstract tokens for each candidate news article
+        candidate_news_categories: List[list] = []  # Categories for each candidate news article
+        candidate_news_subcategories: List[
+            list
+        ] = []  # Subcategories for each candidate news article
+        labels: List[list] = []  # Labels for each candidate news article
+        impression_ids: List[int] = []  # IDs for each impression. That's the row in the behaviors.tsv file
+        user_ids: List[str] = []  # IDs for each user
 
         # Statistics tracking
         total_original_rows = len(behaviors_df)
@@ -831,7 +852,7 @@ class MINDDataset(BaseNewsDataset):
         max_positives_in_row = 0
 
         # Create a lookup dictionary from news ID to pre-tokenized titles
-        news_tokens = dict(
+        news_tokens: Dict[int, np.ndarray] = dict(
             zip(
                 [
                     int(nid.split("N")[1])
@@ -842,7 +863,7 @@ class MINDDataset(BaseNewsDataset):
         )
 
         # Create a lookup dictionary from news ID to pre-tokenized abstracts
-        news_abstract_tokens = dict(
+        news_abstract_tokens: Dict[int, np.ndarray] = dict(
             zip(
                 [
                     int(nid.split("N")[1])
@@ -853,7 +874,7 @@ class MINDDataset(BaseNewsDataset):
         )
 
         # Create lookup dictionaries for categories and subcategories
-        news_categories = dict(
+        news_categories: Dict[int, int] = dict(
             zip(
                 [
                     int(nid.split("N")[1])
@@ -862,7 +883,7 @@ class MINDDataset(BaseNewsDataset):
                 self.processed_news["category_indices"],
             )
         )
-        news_subcategories = dict(
+        news_subcategories: Dict[int, int] = dict(
             zip(
                 [
                     int(nid.split("N")[1])
@@ -885,8 +906,8 @@ class MINDDataset(BaseNewsDataset):
             # Parse all behavior rows
             for _, row in behaviors_df.iterrows():
                 # Count positives in this row
-                impressions = row["impressions"].split()
-                user_id = row["user_id"].split("U")[1]
+                impressions = str(row["impressions"]).split()
+                user_id = str(row["user_id"]).split("U")[1]
                 positives_count = sum(imp.split("-")[1] == "1" for imp in impressions)
 
                 total_positives += positives_count
@@ -895,7 +916,7 @@ class MINDDataset(BaseNewsDataset):
                 max_positives_in_row = max(max_positives_in_row, positives_count)
 
                 # -- Process history
-                history = row["history"].split() if pd.notna(row["history"]) else []
+                history = str(row["history"]).split() if pd.notna(row["history"]) else []
                 history = history[-self.max_history_length :]
 
                 # -- Store indices/tokens instead of embeddings
@@ -990,7 +1011,7 @@ class MINDDataset(BaseNewsDataset):
 
             # Convert to numpy arrays for training data, keep as lists for val/test
             if stage == "train":
-                result = {
+                result: Dict[str, Union[np.ndarray, list]] = {
                     "histories_news_ids": np.array(histories_news_ids, dtype=np.int32),
                     "history_news_tokens": np.array(history_news_tokens, dtype=np.int32),
                     "history_news_abstract_tokens": np.array(
@@ -1011,7 +1032,7 @@ class MINDDataset(BaseNewsDataset):
                     "candidate_news_subcategories": np.array(
                         candidate_news_subcategories, dtype=np.int32
                     ),
-                    "labels": np.array(labels, dtype=np.float32),
+                    "labels": np.array(labels, dtype=self.float_dtype.as_numpy_dtype),
                     "impression_ids": np.array(impression_ids, dtype=np.int32),
                     "user_ids": np.array(user_ids, dtype=np.int32),
                 }
@@ -1053,7 +1074,7 @@ class MINDDataset(BaseNewsDataset):
 
             return result
 
-    def get_news(self) -> Tuple[Dict[str, np.ndarray]]:
+    def get_news(self) -> pd.DataFrame:
         """Load and process news data"""
         train_news_df = pd.read_csv(
             self.dataset_path / "train" / "news.tsv",
@@ -1096,7 +1117,7 @@ class MINDDataset(BaseNewsDataset):
     def get_train_val_data(
         self,
         sampled_user_set: Optional[Set[str]] = None,
-    ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    ) -> Tuple[Dict[str, Union[np.ndarray, list]], Dict[str, Union[np.ndarray, list]]]:
         """Load and process training data, splitting into train and validation sets."""
         # Process behaviors
         behaviors_df = pd.read_csv(
@@ -1108,7 +1129,7 @@ class MINDDataset(BaseNewsDataset):
 
         # Filter by sampled users if provided
         if sampled_user_set is not None:
-            behaviors_df = behaviors_df[behaviors_df["user_id"].isin(sampled_user_set)]
+            behaviors_df = behaviors_df[behaviors_df["user_id"].isin(list(sampled_user_set))]
 
         if self.validation_split_strategy == "random":
             logger.info(
@@ -1160,7 +1181,7 @@ class MINDDataset(BaseNewsDataset):
     def get_test_data(
         self,
         sampled_user_set: Optional[Set[str]] = None,
-    ) -> Dict[str, np.ndarray]:
+    ) -> Dict[str, Union[np.ndarray, list]]:
         """Load and process test data"""
         test_dir = self.dataset_path / "valid"  # Use valid folder for testing
 
@@ -1173,7 +1194,9 @@ class MINDDataset(BaseNewsDataset):
 
         # Filter by sampled users if provided
         if sampled_user_set is not None:
-            test_behaviors = test_behaviors[test_behaviors["user_id"].isin(sampled_user_set)]
+            test_behaviors = test_behaviors[
+                test_behaviors["user_id"].isin(list(sampled_user_set))
+            ]
 
         logger.info(f"Test behaviors: {len(test_behaviors):,}")
 
@@ -1204,7 +1227,7 @@ class MINDDataset(BaseNewsDataset):
             process_subcategory=self.process_subcategory,
         )
 
-    def user_history_dataloader(self, mode: str) -> tf.data.Dataset:
+    def user_history_dataloader(self, mode: str) -> UserHistoryBatchDataloader:
         """Create dataloader for user history validation/testing."""
         if mode == "val":
             user_history_tokens = self.val_behaviors_data["history_news_tokens"]
@@ -1234,7 +1257,7 @@ class MINDDataset(BaseNewsDataset):
             process_subcategory=self.process_subcategory,
         )
 
-    def impression_dataloader(self, mode: str) -> tf.data.Dataset:
+    def impression_dataloader(self, mode: str) -> ImpressionIterator:
         """Create dataloader for impressions validation/testing."""
         if mode == "val":
             impression_tokens = self.val_behaviors_data["candidate_news_tokens"]
@@ -1252,7 +1275,9 @@ class MINDDataset(BaseNewsDataset):
             labels = self.test_behaviors_data["labels"]
             impression_ids = self.test_behaviors_data["impression_ids"]
             candidate_ids = self.test_behaviors_data["candidate_news_ids"]
-        
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
         return ImpressionIterator(
             impression_tokens=impression_tokens,
             impression_abstract_tokens=impression_abstract_tokens,
@@ -1264,27 +1289,33 @@ class MINDDataset(BaseNewsDataset):
             process_title=self.process_title,
             process_abstract=self.process_abstract,
             process_category=self.process_category,
+            process_subcategory=self.process_subcategory,
         )
 
-    def news_dataloader(self) -> tf.data.Dataset:
+    def news_dataloader(self) -> NewsBatchDataloader:
         """Create dataloader for processed news validation/testing."""
+        news_ids = self.processed_news.get("news_ids_original_strings", np.array([]))
+        news_tokens = self.processed_news.get("tokens", np.array([]))
+        news_abstract_tokens = self.processed_news.get("abstract_tokens", np.array([]))
+        news_category_indices = self.processed_news.get("category_indices", np.array([]))
+        news_subcategory_indices = self.processed_news.get("subcategory_indices", np.array([]))
+
         return NewsBatchDataloader(
-            news_ids=self.processed_news["news_ids_original_strings"],
-            news_tokens=self.processed_news["tokens"],
-            news_abstract_tokens=self.processed_news["abstract_tokens"],
-            news_category_indices=self.processed_news["category_indices"],
-            news_subcategory_indices=self.processed_news["subcategory_indices"],
+            news_ids=tf.constant(news_ids),
+            news_tokens=tf.constant(news_tokens),
+            news_abstract_tokens=tf.constant(news_abstract_tokens),
+            news_category_indices=tf.constant(news_category_indices),
+            news_subcategory_indices=tf.constant(news_subcategory_indices),
             batch_size=4512,
         )
-    
 
     def _display_statistics(
         self,
         mode: str = "train",
-        processed_news: Dict[str, np.ndarray] = None,
-        train_behaviors_data: Dict[str, np.ndarray] = None,
-        val_behaviors_data: Dict[str, np.ndarray] = None,
-        test_behaviors_data: Dict[str, np.ndarray] = None,
+        processed_news: Optional[Dict[str, Any]] = None,
+        train_behaviors_data: Optional[Dict[str, Any]] = None,
+        val_behaviors_data: Optional[Dict[str, Any]] = None,
+        test_behaviors_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         if mode == "train":
             data_dict = {
@@ -1361,7 +1392,7 @@ class MINDDataset(BaseNewsDataset):
 
         return vocab
 
-    def _process_knowledge_graph(self) -> None:
+    def _process_knowledge_graph(self, all_news_df: pd.DataFrame) -> None:
         """Process knowledge graph data using the KnowledgeGraphProcessor."""
         logger.info("Processing knowledge graph data...")
 
@@ -1374,7 +1405,7 @@ class MINDDataset(BaseNewsDataset):
         )
 
         # Process knowledge graph
-        kg_processor.process()
+        kg_processor.process(all_news_df["title"])
 
         # Load processed embeddings
         self._load_embeddings()

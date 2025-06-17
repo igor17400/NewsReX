@@ -12,6 +12,7 @@ seed: 42 # Global seed for reproducibility
 # Experiment name
 name: "nrms_mind_small"
 description: "NRMS model trained on MIND-small dataset"
+model_name: "NRMS"
 
 # Dataset specific
 dataset:
@@ -38,21 +39,24 @@ model:
     # Set to 'false' if your model outputs probabilities (e.g., after softmax or sigmoid).
     # Set to 'true' if your model outputs raw, unnormalized scores (logits) and you want the loss function to apply the activation internally.
     from_logits: false # Whether the model outputs logits or probabilities
+    reduction: "sum_over_batch_size"
+    label_smoothing: 0.0
 
 # Training parameters
 train:
-  batch_size: 64
+  batch_size: 16
   num_epochs: 5
   learning_rate: 0.0001
   early_stopping:
-    patience: 4
-    metric: ndcg@10
+    patience: 3
+    min_improvement: 0.01
 
 # Logging
 logging:
-  enable_wandb: true
+  enable_wandb: false
   project_name: "BTC"
   experiment_name: nrms_mind_small
+  log_every_n_steps: 100
 
 # Sampling configuration
 sampling:
@@ -63,5 +67,4 @@ sampling:
 
 device:
   gpu_ids: [ 0 ] # Use first GPU
-  memory_limit: 1
-  mixed_precision: false
+  mixed_precision: true

@@ -30,20 +30,35 @@ BTC is a modular and extensible framework for news recommendation systems resear
 
 ### Prerequisites
 
-1. Install Poetry (Python package manager):
+1. Install Conda (if not already installed):
+```bash
+# Download and install Miniconda
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+```
+
+2. Create and activate a Conda environment with Python 3.11:
+```bash
+# Create new environment
+conda create -n btc_env python=3.11
+# Activate the environment
+conda activate btc_env
+```
+
+3. Install Poetry (Python package manager):
 ```bash
 curl -sSL https://install.python-poetry.org | python3 -
 ```
 
-2. Verify Poetry installation:
+4. Verify Poetry installation:
 ```bash
 poetry --version
 ```
 
-3. Make sure to use one Python version 
+5. Make sure to use one Python version 
 
 ```
-Python >=3.9,<3.12
+Python >=3.11,<=3.12
 ```
 
 ### Installation
@@ -76,7 +91,7 @@ poetry run pre-commit install
 5. You might need to install tensorflow with the following command to make it sure that it'll work with the GPUs
 
 ```bash
-pip install 'tensorflow[and-cuda]'
+poetry add 'tensorflow[and-cuda]'
 ```
 
 To test it out if it worked we recommend executing the following commands:

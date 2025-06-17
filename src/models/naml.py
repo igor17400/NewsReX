@@ -271,9 +271,9 @@ class NAML(BaseModel):
         concat_views = layers.Concatenate(axis=1)(
             [title_vector, abstract_vector, category_vector, subcategory_vector]
         )
-        news_vector = AdditiveAttentionLayer(self.view_attention_query_dim, name="view_attention")(
-            concat_views
-        )
+        news_vector = AdditiveAttentionLayer(
+            self.view_attention_query_dim, name="view_attention"
+        )(concat_views)
 
         return tf.keras.Model(news_input, news_vector, name="news_encoder")
 

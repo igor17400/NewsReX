@@ -26,6 +26,16 @@ from utils.logging import setup_wandb_session
 from utils.device import setup_device
 
 
+def setup_tensorflow_precision(use_mixed_precision: bool):
+    """Sets the global TensorFlow precision policy."""
+    if use_mixed_precision:
+        console.log("Setting TensorFlow mixed precision policy to 'mixed_float16'.")
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+    else:
+        console.log("Using TensorFlow default precision policy 'float32'.")
+
+
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
 def main_training_entry(cfg: DictConfig) -> None:
     """Main entry point for training, configured by Hydra."""
@@ -40,9 +50,14 @@ def main_training_entry(cfg: DictConfig) -> None:
     # Setup device configuration
     setup_device(
         gpu_ids=cfg.device.gpu_ids if hasattr(cfg.device, "gpu_ids") else [],
-        memory_limit=cfg.device.memory_limit if hasattr(cfg.device, "memory_limit") else 0.9,
-        mixed_precision=cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else True
+        memory_limit=cfg.device.memory_limit if hasattr(cfg.device, "memory_limit") else 0.9
     )
+    # Determine precision from the boolean flag
+    use_mixed = cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else False
+    precision_string = "16" if use_mixed else "32"
+    
+    # Set global TensorFlow precision policy
+    setup_tensorflow_precision(use_mixed)
 
     # Set random seeds
     tf.random.set_seed(cfg.seed)

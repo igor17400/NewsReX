@@ -31,7 +31,7 @@ class NewsRecommenderMetrics:
         y_true = np.asarray(y_true)
         y_pred_logits = np.asarray(y_pred_logits)
 
-        if y_true.ndim == 1:
+        if y_true.ndim == 1:  # This is the default case for fast_evaluate
             return self._compute_metrics_single(y_true, y_pred_logits)
 
         results = {k: [] for k in self.METRIC_NAMES}
@@ -39,6 +39,7 @@ class NewsRecommenderMetrics:
             single = self._compute_metrics_single(y_true[i], y_pred_logits[i])
             for k in self.METRIC_NAMES:
                 results[k].append(single[k])
+
         return {k: float(np.mean(v)) for k, v in results.items()}
 
     def compute_metrics_from_scores(self, y_true_grouped, y_pred_scores_grouped, progress=None):
@@ -57,12 +58,8 @@ class NewsRecommenderMetrics:
 
     def _compute_metrics_single(self, y_true, y_pred_logits):
         """Compute metrics for a single impression."""
-        try:
-            # AUC
-            auc = roc_auc_score(y_true, y_pred_logits)
-        except Exception as e:
-            logger.warning(f"Error computing AUC: {e}")
-            auc = 0.0
+        # AUC
+        auc = roc_auc_score(y_true, y_pred_logits)
 
         # MRR
         mrr = self._compute_mrr(y_true, y_pred_logits)
@@ -83,23 +80,22 @@ class NewsRecommenderMetrics:
         order = np.argsort(y_score)[::-1]  # Sort in descending order
         y_true = np.take(y_true, order)
         rr_score = y_true / (np.arange(len(y_true)) + 1)
+
         return np.sum(rr_score) / np.sum(y_true) if np.sum(y_true) > 0 else 0.0
 
-    def _compute_ndcg(self, y_true, y_score, k):
-        """Compute NDCG@k."""
-        k = min(k, len(y_true))
-
-        # Compute DCG
+    def _dcg_score(self, y_true, y_score, k):
+        """Compute Discounted Cumulative Gain (DCG)@k."""
+        k = min(k, y_true.shape[0])
         order = np.argsort(y_score)[::-1]
         y_true = np.take(y_true, order[:k])
         gains = 2**y_true - 1
         discounts = np.log2(np.arange(len(y_true)) + 2)
-        dcg = np.sum(gains / discounts)
 
-        # Compute ideal DCG
-        ideal_order = np.argsort(y_true)[::-1]
-        ideal_y_true = np.take(y_true, ideal_order[:k])
-        ideal_gains = 2**ideal_y_true - 1
-        ideal_dcg = np.sum(ideal_gains / discounts)
+        return np.sum(gains / discounts)
 
-        return dcg / ideal_dcg if ideal_dcg > 0 else 0.0
+    def _compute_ndcg(self, y_true, y_score, k):
+        """Compute NDCG@k."""
+        best = self._dcg_score(y_true, y_true, k)
+        actual = self._dcg_score(y_true, y_score, k)
+
+        return actual / best if best > 0 else 0.0
