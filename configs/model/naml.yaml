@@ -5,20 +5,19 @@ defaults:
 - base
 
 # Word Embedding parameters
-word_embedding_dim: 300
+embedding_size: 300
 
 # News Encoder (NAMLNewsEncoder) parameters
 category_embedding_dim: 100
+subcategory_embedding_dim: 100
 cnn_filter_num: 400 # Number of filters for CNN (output dim for title/abs after CNN)
 cnn_kernel_size: 3
-word_attention_query_dim: 200 # Query vector dim for word-level attention
-view_attention_query_dim: 200 # Query vector dim for view-level attention
-news_encoder_dense_units: 200 # Dense units after view attention in news encoder
-news_embedding_dim: 200 # Final news embedding dimension (output of news encoder)
+word_attention_query_dim: 200 # dim for word-level attention
+view_attention_query_dim: 200 # dim for view-level attention
+user_attention_query_dim: 200 # Hidden dim for user attention
 
 # User Encoder (NAMLUserEncoder) parameters
 user_num_attention_heads: 10 # Must be a divisor of news_embedding_dim (e.g., 200/10 = 20 head_size)
-user_attention_query_dim: 200 # Query vector dim for additive attention in user encoder
 
 # Common parameters
 dropout_rate: 0.2

@@ -5,6 +5,7 @@ import hydra
 import tensorflow as tf
 from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
+from .losses import get_loss
 
 console = Console()
 
@@ -61,7 +62,12 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
     ):
         optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
 
-    loss_function = tf.keras.losses.CategoricalCrossentropy(from_logits=False, name="cce_loss")
+    loss_function = get_loss(
+        loss_name=cfg.model.loss.name,
+        from_logits=cfg.model.loss.from_logits,
+        reduction=cfg.model.loss.reduction,
+        label_smoothing=cfg.model.loss.label_smoothing
+    )
 
     model.compile(optimizer=optimizer, loss=loss_function)
     console.log(

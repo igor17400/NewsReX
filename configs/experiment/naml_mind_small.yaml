@@ -31,36 +31,34 @@ dataset:
 
 # Model specific
 model:
-  embedding_size: 300
-  word_embedding_dim: 300
+  embedding_size: 300 # word embedding size
   category_embedding_dim: 100
-  cnn_filter_num: 300
+  subcategory_embedding_dim: 100
+  cnn_filter_num: 400
   cnn_kernel_size: 3
   word_attention_query_dim: 200
   view_attention_query_dim: 200
-  news_encoder_dense_units: 200
-  news_embedding_dim: 250
-  user_num_attention_heads: 10
   user_attention_query_dim: 200
   dropout_rate: 0.2
   seed: 42
   loss:
     name: "categorical_crossentropy"
     from_logits: false
+    reduction: "sum_over_batch_size"
+    label_smoothing: 0.0
 
 # Training parameters
 train:
   batch_size: 64
-  num_epochs: 10
+  num_epochs: 5
   learning_rate: 0.0001
   early_stopping:
     patience: 3
     min_improvement: 0.01
-  model_dir: "./saved_models/naml/"
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "BTC"
   experiment_name: "naml_mind_small"
   log_every_n_steps: 100

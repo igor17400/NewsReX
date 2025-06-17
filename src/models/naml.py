@@ -66,10 +66,9 @@ class NAML(BaseModel):
         subcategory_embedding_dim: int = 100,
         cnn_filter_num: int = 400,
         cnn_kernel_size: int = 3,
-        word_attention_dim: int = 200,
-        view_attention_dim: int = 200,
-        user_num_attention_heads: int = 16,
-        user_attention_hidden_dim: int = 200,
+        word_attention_query_dim: int = 200,
+        view_attention_query_dim: int = 200,
+        user_attention_query_dim: int = 200,
         dropout_rate: float = 0.2,
         activation: str = "relu",
         max_history_length: int = 50,
@@ -88,10 +87,9 @@ class NAML(BaseModel):
         self.subcategory_embedding_dim = subcategory_embedding_dim
         self.cnn_filter_num = cnn_filter_num
         self.cnn_kernel_size = cnn_kernel_size
-        self.word_attention_dim = word_attention_dim
-        self.view_attention_dim = view_attention_dim
-        self.user_num_attention_heads = user_num_attention_heads
-        self.user_attention_hidden_dim = user_attention_hidden_dim
+        self.word_attention_query_dim = word_attention_query_dim
+        self.view_attention_query_dim = view_attention_query_dim
+        self.user_attention_query_dim = user_attention_query_dim
         self.dropout_rate = dropout_rate
         self.activation = activation
         self.max_history_length = max_history_length
@@ -147,7 +145,7 @@ class NAML(BaseModel):
         title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(title_cnn)
 
         title_attention = AdditiveAttentionLayer(
-            self.word_attention_dim, name="title_word_attention"
+            self.word_attention_query_dim, name="title_word_attention"
         )(title_dropout)
         title_vector = layers.Reshape((1, self.cnn_filter_num))(title_attention)
 
@@ -172,7 +170,7 @@ class NAML(BaseModel):
         abstract_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(abstract_cnn)
 
         abstract_attention = AdditiveAttentionLayer(
-            self.word_attention_dim, name="abstract_word_attention"
+            self.word_attention_query_dim, name="abstract_word_attention"
         )(abstract_dropout)
         abstract_vector = layers.Reshape((1, self.cnn_filter_num))(abstract_attention)
 
@@ -269,11 +267,11 @@ class NAML(BaseModel):
         subcategory_encoder = self._build_subcategory_embedding_layer()
         subcategory_vector = subcategory_encoder(news_components["subcategory_id"])
 
-        # --- Combine all views ---
+        # --- Combine all views about a news article ---
         concat_views = layers.Concatenate(axis=1)(
             [title_vector, abstract_vector, category_vector, subcategory_vector]
         )
-        news_vector = AdditiveAttentionLayer(self.view_attention_dim, name="view_attention")(
+        news_vector = AdditiveAttentionLayer(self.view_attention_query_dim, name="view_attention")(
             concat_views
         )
 
@@ -295,7 +293,7 @@ class NAML(BaseModel):
         )
 
         user_representation = AdditiveAttentionLayer(
-            self.user_attention_hidden_dim, name="user_additive_attention"
+            self.user_attention_query_dim, name="user_additive_attention"
         )(news_vectors)
 
         return tf.keras.Model(hist_input, user_representation, name="user_encoder")
@@ -525,10 +523,9 @@ class NAML(BaseModel):
                 "subcategory_embedding_dim": self.subcategory_embedding_dim,
                 "cnn_filter_num": self.cnn_filter_num,
                 "cnn_kernel_size": self.cnn_kernel_size,
-                "word_attention_dim": self.word_attention_dim,
-                "view_attention_dim": self.view_attention_dim,
-                "user_num_attention_heads": self.user_num_attention_heads,
-                "user_attention_hidden_dim": self.user_attention_hidden_dim,
+                "word_attention_query_dim": self.word_attention_query_dim,
+                "view_attention_query_dim": self.view_attention_query_dim,
+                "user_attention_query_dim": self.user_attention_query_dim,
                 "dropout_rate": self.dropout_rate,
                 "seed": self.seed,
                 "vocab_size": self.vocab_size,

@@ -23,6 +23,7 @@ from utils.logging import setup_logging, console
 from utils.model import initialize_model_and_dataset
 from utils.orchestration import training_loop_orchestrator
 from utils.logging import setup_wandb_session
+from utils.device import setup_device
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -36,10 +37,14 @@ def main_training_entry(cfg: DictConfig) -> None:
     console.log(OmegaConf.to_yaml(cfg))
     console.log("------------------------------------")
 
-    if cfg.device.mixed_precision:
-        policy = tf.keras.mixed_precision.Policy("mixed_float16")
-        tf.keras.mixed_precision.set_global_policy(policy)
-        console.log(f"Mixed precision policy globally set to: {policy.name}")
+    # Setup device configuration
+    setup_device(
+        gpu_ids=cfg.device.gpu_ids if hasattr(cfg.device, "gpu_ids") else [],
+        memory_limit=cfg.device.memory_limit if hasattr(cfg.device, "memory_limit") else 0.9,
+        mixed_precision=cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else True
+    )
+
+    # Set random seeds
     tf.random.set_seed(cfg.seed)
     np.random.seed(cfg.seed)
 

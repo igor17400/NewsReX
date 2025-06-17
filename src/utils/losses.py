@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 
 import tensorflow as tf
 
@@ -6,8 +6,13 @@ import tensorflow as tf
 class NewsRecommenderLoss(tf.keras.losses.Loss):
     """Base class for news recommendation losses."""
 
-    def __init__(self, name: str = "news_recommender_loss", **kwargs: Any) -> None:
-        super().__init__(name=name, **kwargs)
+    def __init__(
+        self,
+        name: str = "news_recommender_loss",
+        reduction: str = "sum_over_batch_size",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(name=name, reduction=reduction, **kwargs)
 
 
 class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
@@ -19,13 +24,26 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
     Args:
         name: Loss name
         from_logits: Whether the predictions are logits or probabilities
+        reduction: Type of reduction to apply to loss. One of:
+            - 'none': No reduction
+            - 'sum': Sum of losses
+            - 'sum_over_batch_size': Sum of losses divided by batch size
+            - 'mean': Mean of losses
+            - 'mean_with_sample_weight': Mean of losses weighted by sample weights
+        label_smoothing: Float in [0, 1]. When > 0, label values are smoothed
     """
 
     def __init__(
-        self, name: str = "categorical_crossentropy", from_logits: bool = False, **kwargs: Any
+        self,
+        name: str = "categorical_crossentropy",
+        from_logits: bool = False,
+        reduction: str = "sum_over_batch_size",
+        label_smoothing: float = 0.0,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(name=name, **kwargs)
+        super().__init__(name=name, reduction=reduction, **kwargs)
         self.from_logits = from_logits
+        self.label_smoothing = label_smoothing
 
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """Compute the loss.
@@ -37,8 +55,8 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
         Returns:
             Loss value
         """
-        return tf.reduce_mean(
-            tf.keras.losses.categorical_crossentropy(y_true, y_pred, from_logits=self.from_logits)
+        return tf.keras.losses.categorical_crossentropy(
+            y_true, y_pred, from_logits=self.from_logits, label_smoothing=self.label_smoothing
         )
 
 
@@ -51,13 +69,26 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
     Args:
         name: Loss name
         from_logits: Whether the predictions are logits or probabilities
+        reduction: Type of reduction to apply to loss. One of:
+            - 'none': No reduction
+            - 'sum': Sum of losses
+            - 'sum_over_batch_size': Sum of losses divided by batch size
+            - 'mean': Mean of losses
+            - 'mean_with_sample_weight': Mean of losses weighted by sample weights
+        label_smoothing: Float in [0, 1]. When > 0, label values are smoothed
     """
 
     def __init__(
-        self, name: str = "binary_crossentropy", from_logits: bool = False, **kwargs: Any
+        self,
+        name: str = "binary_crossentropy",
+        from_logits: bool = False,
+        reduction: str = "sum_over_batch_size",
+        label_smoothing: float = 0.0,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(name=name, **kwargs)
+        super().__init__(name=name, reduction=reduction, **kwargs)
         self.from_logits = from_logits
+        self.label_smoothing = label_smoothing
 
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         """Compute the loss.
@@ -69,8 +100,8 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
         Returns:
             Loss value
         """
-        return tf.reduce_mean(
-            tf.keras.losses.binary_crossentropy(y_true, y_pred, from_logits=self.from_logits)
+        return tf.keras.losses.binary_crossentropy(
+            y_true, y_pred, from_logits=self.from_logits, label_smoothing=self.label_smoothing
         )
 
 
@@ -79,7 +110,10 @@ def get_loss(loss_name: str, **kwargs: Any) -> NewsRecommenderLoss:
 
     Args:
         loss_name: Name of the loss function
-        **kwargs: Additional arguments for the loss function
+        **kwargs: Additional arguments for the loss function including:
+            - from_logits: bool
+            - reduction: str (one of: 'none', 'sum', 'sum_over_batch_size', 'mean', 'mean_with_sample_weight')
+            - label_smoothing: float
 
     Returns:
         Loss function instance

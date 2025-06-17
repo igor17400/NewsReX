@@ -14,13 +14,12 @@ def train_step_fn(
 
     with tf.GradientTape() as tape:
         predictions = model(features, training=True)
-        loss = model.compute_loss(
-            x=features,
-            y=labels,
-            y_pred=predictions,
-            sample_weight=None,
-            training=True,
-        )
+
+        # Get the loss function from the model
+        loss_fn = model.loss
+
+        # Compute loss using the configured loss function
+        loss = loss_fn(y_true=labels, y_pred=predictions, sample_weight=None)
 
     trainable_vars = model.trainable_variables
     gradients = tape.gradient(loss, trainable_vars)
@@ -52,8 +51,15 @@ def test_step_fn(
     features, labels = data
     predictions = model(features, training=False)
 
-    loss = model.compiled_loss(labels, predictions, regularization_losses=model.losses)
-    model.compiled_metrics.update_state(labels, predictions)
+    # Get the loss function from the model
+    loss_fn = model.loss
+
+    # Compute loss using the configured loss function
+    loss = loss_fn(y_true=labels, y_pred=predictions, sample_weight=None)
+
+    # Update metrics
+    for metric in model.metrics:
+        metric.update_state(labels, predictions)
 
     batch_metrics = {m.name: m.result() for m in model.metrics}
     batch_metrics["loss"] = loss

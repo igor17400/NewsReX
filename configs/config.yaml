@@ -23,7 +23,6 @@ train:
   learning_rate: 0.0001
   gradient_clip_val: 1.0
   early_stopping_patience: 5
-  model_dir: "checkpoints"
 
 # Default evaluation parameters (can be overridden by experiment)
 eval:
