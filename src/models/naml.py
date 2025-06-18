@@ -1,7 +1,5 @@
-from typing import Any, Dict, List, Optional, Tuple, cast
-from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
@@ -118,11 +116,11 @@ class NAML(BaseModel):
 
     def _build_word_embedding_layer(self) -> layers.Embedding:
         return layers.Embedding(
-            self.vocab_size,
-            self.embedding_size,
+            input_dim=self.vocab_size,
+            output_dim=self.embedding_size,
             embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
-            mask_zero=False,
+            mask_zero=True,
             name="word_embedding",
         )
 

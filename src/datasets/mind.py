@@ -1306,7 +1306,11 @@ class MINDDataset(BaseNewsDataset):
             news_abstract_tokens=tf.constant(news_abstract_tokens),
             news_category_indices=tf.constant(news_category_indices),
             news_subcategory_indices=tf.constant(news_subcategory_indices),
-            batch_size=4512,
+            batch_size=512,
+            process_title=self.process_title,
+            process_abstract=self.process_abstract,
+            process_category=self.process_category,
+            process_subcategory=self.process_subcategory,
         )
 
     def _display_statistics(

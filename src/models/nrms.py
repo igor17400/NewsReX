@@ -1,116 +1,10 @@
-from typing import Any, Dict, Tuple, Optional, List
-from pathlib import Path
+from typing import Tuple, Dict, Any
 
 import tensorflow as tf
 from tensorflow.keras import layers
 
-# Assuming AdditiveSelfAttention is correctly defined in .layers
-from .layers import AdditiveSelfAttention
+from .layers import AdditiveAttentionLayer
 from .base import BaseModel
-import numpy as np
-
-# from utils.losses import get_loss # Not used in this file directly
-from utils.saving import save_predictions_to_file_fn
-
-
-class SelfAttention(layers.Layer):
-    """Multi-head self attention layer using Keras's built-in implementation.
-
-    This layer is a wrapper around Keras's MultiHeadAttention that simplifies self-attention usage.
-    Key differences from raw MultiHeadAttention:
-    1. Simplified Interface:
-        - Automatically uses same tensor for query, key, and value (self-attention)
-        - No need to manually specify q,k,v when they're the same tensor
-
-    2. Fixed Output Shape:
-        - Ensures output matches input dimensions
-        - Handles dimension management internally
-
-    3. Built-in Features:
-        - Includes dropout for regularization
-        - Handles layer normalization
-        - Manages attention head dimensions
-
-    Usage in NRMS:
-    1. Word-level attention: Captures relationships between words in news titles
-    2. News-level attention: Models relationships between news articles in user history
-
-    Example:
-        # For word embeddings in a title
-        word_embeddings = ... # shape: (batch_size, seq_len, embed_dim)
-        attention_output = SelfAttention(multiheads=8, head_dim=64)(word_embeddings)
-        # Output shape: (batch_size, seq_len, multiheads * head_dim)
-    """
-
-    def __init__(self, multiheads, head_dim, seed=0, **kwargs):
-        super().__init__(**kwargs)
-        self.multiheads = multiheads
-        self.head_dim = head_dim
-        self.seed = seed
-        self.multihead_attention = None
-
-    def build(self, input_shape):
-        """Initializes the internal MultiHeadAttention layer.
-
-        This method creates the MultiHeadAttention layer with the specified number of heads, head dimension, and seed.
-
-        Args:
-            input_shape: Shape of the input tensor.
-        """
-        # Create the MultiHeadAttention layer
-        self.multihead_attention = layers.MultiHeadAttention(
-            num_heads=self.multiheads,
-            key_dim=self.head_dim,
-            value_dim=self.head_dim,  # value_dim should typically match key_dim
-            output_shape=self.head_dim
-            * self.multiheads,  # output_shape is inferred, not set directly. This might be an old API usage or custom expectation.
-            # For standard MHA, output is (batch_size, seq_len, num_heads * key_dim) if output_shape is None.
-            # If output_shape is specified, it dictates the last dimension.
-            seed=self.seed,
-        )
-        super().build(input_shape)
-
-    def call(
-        self, inputs, training=None
-    ):  # Added training argument for consistency, MHA handles it
-        """Applies multi-head self-attention to the input tensor(s).
-
-        This method computes self-attention over the input(s) using the underlying Keras MultiHeadAttention layer.
-
-        Args:
-            inputs: Either a single tensor (used as query, key, and value) or a list of three tensors [query, key, value].
-            training: Boolean or None. Indicates whether the layer should behave in training mode or inference mode.
-
-        Returns:
-            tf.Tensor: The result of the multi-head attention operation.
-        """
-        if isinstance(inputs, list):
-            query, key, value = inputs
-        else:
-            query = key = value = inputs
-        # Pass the training argument to the underlying MHA layer
-        return self.multihead_attention(
-            query, value, key, training=training
-        )  # Correct order for MHA is query, value, key
-
-    def get_config(self):
-        """Returns the configuration of the SelfAttention layer for serialization.
-
-        This method provides a dictionary of the layer's hyperparameters and settings,
-        enabling the layer to be saved and reconstructed later.
-
-        Returns:
-            dict: Layer configuration including number of heads, head dimension, and seed.
-        """
-        config = super().get_config()
-        config.update(
-            {
-                "multiheads": self.multiheads,
-                "head_dim": self.head_dim,
-                "seed": self.seed,
-            }
-        )
-        return config
 
 
 class NRMS(BaseModel):
@@ -118,14 +12,17 @@ class NRMS(BaseModel):
 
     def __init__(
         self,
-        processed_news,
-        embedding_size=300,
-        multiheads=16,
-        head_dim=16,
-        attention_hidden_dim=200,
-        dropout_rate=0.2,
-        seed=42,
-        name="nrms",
+        processed_news: Dict[str, Any],
+        embedding_size: int = 300,
+        multiheads: int = 16,
+        head_dim: int = 16,
+        attention_hidden_dim: int = 200,
+        dropout_rate: float = 0.2,
+        seed: int = 42,
+        max_title_length: int = 50,
+        max_history_length: int = 50,
+        max_impressions_length: int = 5,
+        name: str = "nrms",
         **kwargs,
     ):
         super().__init__(name=name, **kwargs)
@@ -136,6 +33,9 @@ class NRMS(BaseModel):
         self.attention_hidden_dim = attention_hidden_dim
         self.dropout_rate = dropout_rate
         self.seed = seed
+        self.max_title_length = max_title_length
+        self.max_history_length = max_history_length
+        self.max_impressions_length = max_impressions_length
 
         tf.random.set_seed(
             self.seed
@@ -146,11 +46,11 @@ class NRMS(BaseModel):
 
         # Build components
         self.embedding_layer = layers.Embedding(
-            self.vocab_size,
-            self.embedding_size,
+            input_dim=self.vocab_size,
+            output_dim=self.embedding_size,
             embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
-            mask_zero=False,
+            mask_zero=True,
             name="word_embedding",
         )
 
@@ -175,7 +75,7 @@ class NRMS(BaseModel):
                 Output: (batch_size, embedding_dim) - news embeddings
         """
         sequences_input_title = tf.keras.Input(
-            shape=(None,), dtype="int32", name="news_tokens_input"
+            shape=(self.max_title_length,), dtype="int32", name="news_tokens_input"
         )
 
         # Word Embedding
@@ -184,15 +84,23 @@ class NRMS(BaseModel):
         # Dropout after embedding
         y = layers.Dropout(self.dropout_rate, seed=self.seed)(embedded_sequences_title)
 
-        # Self-Attention over words in a title
-        y = SelfAttention(
-            self.multiheads, self.head_dim, seed=self.seed, name="title_word_self_attention"
-        )([y, y, y])
-        y = layers.Dropout(self.dropout_rate, seed=self.seed + 1)(y)
+        # Multi-Head Self-Attention over words in a title
+        y = layers.MultiHeadAttention(
+            num_heads=self.multiheads,
+            key_dim=self.head_dim,
+            dropout=self.dropout_rate,
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+            name="title_word_self_attention",
+        )(y, y, y)
+
+        # Apply dropout after attention
+        y = layers.Dropout(self.dropout_rate, seed=self.seed)(y)
 
         # Additive Attention to get a single news vector
-        pred_title = AdditiveSelfAttention(
-            self.attention_hidden_dim, name="title_additive_attention"
+        pred_title = AdditiveAttentionLayer(
+            query_vec_dim=self.attention_hidden_dim,
+            seed=self.seed,
+            name="title_additive_attention",
         )(y)
 
         return tf.keras.Model(sequences_input_title, pred_title, name="news_encoder")
@@ -212,7 +120,9 @@ class NRMS(BaseModel):
         """
         # Input shape: (batch_size, num_history_news, num_words_in_title)
         his_input_title_tokens = tf.keras.Input(
-            shape=(None, None), dtype="int32", name="history_news_tokens_input"
+            shape=(self.max_history_length, self.max_title_length),
+            dtype="int32",
+            name="history_news_tokens_input",
         )
 
         # Apply newsencoder to each news item in history
@@ -221,14 +131,20 @@ class NRMS(BaseModel):
         )(his_input_title_tokens)
 
         # Self-Attention over browsed news
-        y = SelfAttention(
-            self.multiheads, self.head_dim, seed=self.seed + 2, name="browsed_news_self_attention"
-        )([click_title_presents, click_title_presents, click_title_presents])
-        y = layers.Dropout(self.dropout_rate, seed=self.seed + 3)(y)
+        y = layers.MultiHeadAttention(
+            num_heads=self.multiheads,
+            key_dim=self.head_dim,
+            dropout=self.dropout_rate,
+            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+            name="browsed_news_self_attention",
+        )(click_title_presents, click_title_presents, click_title_presents)
+        y = layers.Dropout(self.dropout_rate, seed=self.seed)(y)
 
         # Additive Attention to get a single user vector
-        user_present = AdditiveSelfAttention(
-            self.attention_hidden_dim, name="user_additive_attention"
+        user_present = AdditiveAttentionLayer(
+            query_vec_dim=self.attention_hidden_dim,
+            seed=self.seed,
+            name="user_additive_attention",
         )(y)
 
         return tf.keras.Model(his_input_title_tokens, user_present, name="user_encoder")
@@ -252,10 +168,14 @@ class NRMS(BaseModel):
         """
         # --- Inputs for Training Model ---
         history_tokens_input_train = tf.keras.Input(
-            shape=(None, None), dtype="int32", name="history_tokens_train"
+            shape=(self.max_history_length, self.max_title_length),
+            dtype="int32",
+            name="history_tokens_train",
         )
         candidate_tokens_input_train = tf.keras.Input(
-            shape=(None, None), dtype="int32", name="candidate_tokens_train"
+            shape=(self.max_impressions_length, self.max_title_length),
+            dtype="int32",
+            name="candidate_tokens_train",
         )
 
         # ------ Training Model Graph ------
@@ -283,10 +203,14 @@ class NRMS(BaseModel):
 
         # ------ Inputs for Scorer Model ------
         history_tokens_input_score = tf.keras.Input(
-            shape=(None, None), dtype="int32", name="history_tokens_score"
+            shape=(self.max_history_length, self.max_title_length),
+            dtype="int32",
+            name="history_tokens_score",
         )
         single_candidate_tokens_input_score = tf.keras.Input(
-            shape=(None,), dtype="int32", name="single_candidate_tokens_score"
+            shape=(self.max_title_length,),
+            dtype="int32",
+            name="single_candidate_tokens_score",
         )
 
         # --- Scorer Model Graph ---
@@ -393,6 +317,7 @@ class NRMS(BaseModel):
         Raises:
             ValueError: If input format is invalid for inference
         """
+        print("#### hello! ####")
         # Case 1: Single candidate scoring
         if "single_candidate_tokens" in inputs:
             history = inputs["history_tokens"]
@@ -428,6 +353,7 @@ class NRMS(BaseModel):
             This method processes candidates one at a time to ensure proper batch handling
             and to maintain consistency with the scorer_model's expectations.
         """
+        print("#### _score_multiple_candidates ####")
         history_batch = inputs["hist_tokens"]  # Shape: (batch_size, history_len, title_len)
         candidates_batch = inputs["cand_tokens"]  # Shape: (batch_size, num_candidates, title_len)
 

@@ -45,10 +45,6 @@ class BaseModel(Model):
             # Convert batch to numpy arrays
             news_ids = batch["news_id"]
             news_features = batch["news_features"]
-            print("--- news_ids ---")
-            print(news_ids[:10])
-            print("--- news_features ---")
-            print(news_features[:10])
 
             batch_vecs = self.newsencoder(news_features, training=False).numpy()
 
@@ -105,22 +101,14 @@ class BaseModel(Model):
         """Fast evaluation of the model using precomputed vectors and dataloader iterators."""
         # 1. Precompute news vectors
         news_vecs_dict = self.precompute_news_vectors(news_dataloader, progress)
-        print("--- news vectors ---")
-        print(list(news_vecs_dict.keys())[:10])
-        print(list(news_vecs_dict.values())[:10])
 
         # 2. Precompute user vectors
         user_vecs_dict = self.precompute_user_vectors(user_hist_dataloader, progress)
-        print("--- user vectors ---")
-        print(list(user_vecs_dict.keys())[:10])
-        print(list(user_vecs_dict.values())[:10])
 
         # 3. Score impressions using precomputed user and news vectors
         group_labels_list: List[np.ndarray] = []
         group_preds_list: List[np.ndarray] = []
         predictions_to_save = {}
-        
-        print(bunda)
 
         # Create progress bar for impressions
         impression_progress = progress.add_task(
@@ -236,7 +224,7 @@ class BaseModel(Model):
             for metric_name, value in impression_metrics.items():
                 if metric_name in metric_values_agg:
                     metric_values_agg[metric_name].append(float(value))
-            
+
         final_metrics = {
             "loss": (
                 (val_loss_total / num_valid_impressions_for_loss)

@@ -83,7 +83,7 @@ class ImpressionIterator:
             candidate_ids = tf.constant([self.candidate_ids[idx]], dtype=tf.int32)
 
             yield features, labels, impression_id, candidate_ids
-    
+
     def __len__(self):
         """Return the total number of impressions."""
         return self.num_impressions
@@ -144,6 +144,10 @@ class NewsBatchDataloader:
         news_category_indices: tf.Tensor,
         news_subcategory_indices: tf.Tensor,
         batch_size: int = 1024,
+        process_title: bool = True,
+        process_abstract: bool = True,
+        process_category: bool = True,
+        process_subcategory: bool = True,
     ):
         """Initialize with news data.
 
@@ -163,6 +167,11 @@ class NewsBatchDataloader:
         self.batch_size = batch_size
         self.num_news = len(news_ids)
 
+        self.process_title = process_title
+        self.process_abstract = process_abstract
+        self.process_category = process_category
+        self.process_subcategory = process_subcategory
+
     def __iter__(self):
         """Create generator for batched news processing."""
         for i in range(0, self.num_news, self.batch_size):
@@ -181,10 +190,18 @@ class NewsBatchDataloader:
             if len(batch_subcategory.shape) == 1:
                 batch_subcategory = tf.expand_dims(batch_subcategory, axis=1)
 
+            batch_features = []
+            if self.process_title:
+                batch_features.append(batch_tokens)
+            if self.process_abstract:
+                batch_features.append(batch_abstract)
+            if self.process_category:
+                batch_features.append(batch_category)
+            if self.process_subcategory:
+                batch_features.append(batch_subcategory)
+
             # Concatenate features
-            batch_features = tf.concat(
-                [batch_tokens, batch_abstract, batch_category, batch_subcategory], axis=1
-            )
+            batch_features = tf.concat(batch_features, axis=1)
 
             yield {"news_id": batch_ids, "news_features": batch_features}
 

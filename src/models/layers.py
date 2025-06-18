@@ -1,202 +1,104 @@
-import tensorflow as tf
-from tensorflow.keras import layers
-from typing import Optional, Dict, Any
+# Copyright (c) Recommenders contributors.
+# Licensed under the MIT License.
+#
+# This code has been updated to use the modern Keras 3 API.
+# The SelfAttention layer has been refactored to use the built-in
+# keras.layers.MultiHeadAttention for better performance and maintainability.
 
-
-class AdditiveSelfAttention(layers.Layer):
-    """
-    Additive Self-Attention layer.
-
-    Computes a context vector as a weighted sum of the input sequence elements.
-    The weights are learned using a small feed-forward network.
-
-    Args:
-        query_vector_dim (int): Dimension of the query vector in the attention mechanism.
-                                This is the output dimension of the first dense layer.
-        dropout (float): Dropout rate to apply to the attention mechanism. Defaults to 0.0.
-    """
-
-    def __init__(self, query_vector_dim: int, dropout: float = 0.0, **kwargs):
-        super().__init__(**kwargs)
-        self.query_vector_dim = query_vector_dim
-        self.dropout_rate = dropout
-
-        # Layers will be defined in build() to know input_dim
-        self.dense_tanh = None
-        self.dense_score = None
-        self.dropout_layer = None
-
-    def build(self, input_shape: tf.TensorShape):
-        """
-        Build the layer's weights.
-
-        Args:
-            input_shape: Shape of the input tensor (batch_size, sequence_length, embedding_dim).
-        """
-        super().build(input_shape)
-        # input_shape[-1] is the embedding_dim or feature_dim of each item in the sequence
-
-        self.dense_tanh = layers.Dense(
-            units=self.query_vector_dim, activation="tanh", name="attention_dense_tanh"
-        )
-        self.dense_score = layers.Dense(
-            units=1, activation=None, name="attention_dense_score"  # Raw scores
-        )
-        if self.dropout_rate > 0.0:
-            self.dropout_layer = layers.Dropout(self.dropout_rate)
-
-    def call(
-        self, inputs: tf.Tensor, training: bool = None, mask: Optional[tf.Tensor] = None
-    ) -> tf.Tensor:
-        """
-        Forward pass of the layer.
-
-        Args:
-            inputs: Input tensor of shape (batch_size, sequence_length, embedding_dim).
-            training: Boolean indicating whether the layer should behave in training mode (e.g., for dropout).
-            mask: Optional mask tensor of shape (batch_size, sequence_length) with 0s for masked elements.
-
-        Returns:
-            Context vector of shape (batch_size, embedding_dim).
-        """
-        # Process inputs through the first dense layer
-        # query_projection shape: (batch_size, sequence_length, query_vector_dim)
-        query_projection = self.dense_tanh(inputs)
-
-        if self.dropout_layer is not None:
-            query_projection = self.dropout_layer(query_projection, training=training)
-
-        # Compute attention scores
-        # attention_scores shape: (batch_size, sequence_length, 1)
-        attention_scores = self.dense_score(query_projection)
-
-        if mask is not None:
-            # Apply the mask (set scores of masked items to a very small number before softmax)
-            mask = tf.expand_dims(
-                tf.cast(mask, self.compute_dtype), axis=-1
-            )  # (batch_size, sequence_length, 1)
-            attention_scores += mask * -1e9  # Add a large negative number to masked positions
-
-        # Compute attention weights using softmax
-        # attention_weights shape: (batch_size, sequence_length, 1)
-        attention_weights = tf.nn.softmax(attention_scores, axis=1)
-
-        # Compute the context vector as a weighted sum of the input sequence
-        # context_vector shape: (batch_size, embedding_dim)
-        return tf.reduce_sum(attention_weights * inputs, axis=1)
-
-    def get_config(self) -> Dict[str, Any]:
-        """Returns the serializable config of the layer."""
-        config = super().get_config()
-        config.update(
-            {
-                "query_vector_dim": self.query_vector_dim,
-                "dropout": self.dropout_rate,
-            }
-        )
-        return config
+import keras
+from keras import layers
+from keras import ops
 
 
 class AdditiveAttentionLayer(layers.Layer):
     """
-    Additive Attention layer with modern Keras implementation.
+    Soft-alignment-based attention layer.
 
-    This layer implements additive attention mechanism (also known as Bahdanau attention)
-    which computes attention weights using a feed-forward neural network.
+    This layer computes a weighted sum of the input sequence, where the weights are
+    learned during training. It's a common attention mechanism used in various
+    NLP and recommendation models.
 
     Args:
-        attention_dim (int): Dimension of the attention mechanism's hidden layer.
-        dropout_rate (float): Dropout rate to apply to the attention mechanism. Defaults to 0.0.
-        seed (int): Random seed for reproducibility. Defaults to 42.
+        dim (int): The hidden dimension of the attention mechanism.
+        seed (int): Random seed for reproducibility of initializers.
     """
 
-    def __init__(self, attention_dim: int = 200, dropout_rate: float = 0.0, seed: int = 42, **kwargs):
+    def __init__(self, query_vec_dim=200, seed=0, **kwargs):
         super().__init__(**kwargs)
-        self.attention_dim = attention_dim
-        self.dropout_rate = dropout_rate
+        self.dim = query_vec_dim
         self.seed = seed
+        self.supports_masking = True
 
-        # Layers will be defined in build() to know input_dim
-        self.dense_tanh = None
-        self.dense_score = None
-        self.dropout_layer = None
-
-    def build(self, input_shape: tf.TensorShape):
+    def build(self, input_shape):
         """
-        Build the layer's weights.
+        Create the weights for the layer.
 
-        Args:
-            input_shape: Shape of the input tensor (batch_size, sequence_length, embedding_dim).
+        This method creates the three trainable variables: W, b, and q, which are
+        used to compute the attention scores.
         """
+        if not isinstance(input_shape, tuple) or len(input_shape) != 3:
+            raise ValueError("A `AttLayer2` layer should be called on a 3D tensor.")
+
+        # Weight matrix for the dense transformation
+        self.W = self.add_weight(
+            name="W",
+            shape=(input_shape[-1], self.dim),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True,
+        )
+        # Bias vector for the dense transformation
+        self.b = self.add_weight(
+            name="b",
+            shape=(self.dim,),
+            initializer=keras.initializers.Zeros(),
+            trainable=True,
+        )
+        # Query vector to compute attention scores
+        self.q = self.add_weight(
+            name="q",
+            shape=(self.dim, 1),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True,
+        )
         super().build(input_shape)
 
-        # First dense layer with tanh activation
-        self.dense_tanh = layers.Dense(
-            units=self.attention_dim,
-            activation="tanh",
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-            bias_initializer=tf.keras.initializers.Zeros(),
-            name="attention_dense_tanh",
-        )
-
-        # Second dense layer for attention scores (no activation)
-        self.dense_score = layers.Dense(
-            units=1,
-            activation=None,
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-            bias_initializer=tf.keras.initializers.Zeros(),
-            name="attention_dense_score",
-        )
-
-        if self.dropout_rate > 0.0:
-            self.dropout_layer = layers.Dropout(self.dropout_rate, seed=self.seed)
-
-    def call(
-        self, inputs: tf.Tensor, training: bool = None, mask: Optional[tf.Tensor] = None
-    ) -> tf.Tensor:
+    def call(self, inputs, mask=None):
         """
-        Forward pass of the layer.
+        Defines the forward pass of the layer.
 
         Args:
-            inputs: Input tensor of shape (batch_size, sequence_length, embedding_dim).
-            training: Boolean indicating whether the layer should behave in training mode.
-            mask: Optional mask tensor of shape (batch_size, sequence_length) with 0s for masked elements.
+            inputs (keras.KerasTensor): The input 3D tensor `(batch_size, time_steps, features)`.
+            mask (keras.KerasTensor, optional): A boolean mask `(batch_size, time_steps)`
+                                                to ignore certain time steps.
 
         Returns:
-            Context vector of shape (batch_size, embedding_dim).
+            keras.KerasTensor: A 2D tensor `(batch_size, features)` representing the
+                weighted sum of the input sequence.
         """
-        # Process inputs through the first dense layer
-        # shape: (batch_size, sequence_length, attention_dim)
-        attention = self.dense_tanh(inputs)
+        # 1. Dense transformation and non-linearity
+        attention_hidden = ops.tanh(ops.matmul(inputs, self.W) + self.b)
 
-        if self.dropout_layer is not None:
-            attention = self.dropout_layer(attention, training=training)
+        # 2. Compute attention scores
+        attention_scores = ops.matmul(attention_hidden, self.q)
+        attention_scores = ops.squeeze(attention_scores, axis=-1)
 
-        # Compute attention scores
-        # shape: (batch_size, sequence_length, 1)
-        attention_scores = self.dense_score(attention)
+        # 3. Apply exp and mask (following original paper implementation)
+        if mask is None:
+            attention = ops.exp(attention_scores)
+        else:
+            attention = ops.exp(attention_scores) * ops.cast(mask, dtype=self.compute_dtype)
 
-        if mask is not None:
-            # Apply the mask (set scores of masked items to a very small number before softmax)
-            mask = tf.expand_dims(tf.cast(mask, self.compute_dtype), axis=-1)
-            attention_scores += mask * -1e9
-
-        # Compute attention weights using softmax
-        # shape: (batch_size, sequence_length, 1)
-        attention_weights = tf.nn.softmax(attention_scores, axis=1)
-
-        # Compute the context vector as a weighted sum of the input sequence
-        # shape: (batch_size, embedding_dim)
-        return tf.reduce_sum(attention_weights * inputs, axis=1)
-
-    def get_config(self) -> Dict[str, Any]:
-        """Returns the serializable config of the layer."""
-        config = super().get_config()
-        config.update(
-            {
-                "attention_dim": self.attention_dim,
-                "dropout_rate": self.dropout_rate,
-                "seed": self.seed,
-            }
+        # 4. Normalize attention weights
+        attention_weights = attention / (
+            ops.sum(attention, axis=-1, keepdims=True) + keras.backend.epsilon()
         )
-        return config
+
+        # 5. Compute weighted sum of inputs
+        attention_weights_expanded = ops.expand_dims(attention_weights, axis=-1)
+        weighted_input = inputs * attention_weights_expanded
+
+        return ops.sum(weighted_input, axis=1)
+
+    def compute_output_shape(self, input_shape):
+        """Computes the output shape of the layer."""
+        return input_shape[0], input_shape[-1]
