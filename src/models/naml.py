@@ -120,7 +120,7 @@ class NAML(BaseModel):
             output_dim=self.embedding_size,
             embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
-            mask_zero=True,
+            mask_zero=False,
             name="word_embedding",
         )
 

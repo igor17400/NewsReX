@@ -24,6 +24,9 @@ dataset:
   random_train_samples: true
   validation_split_strategy: "random" # Options: chronological, random
   process_title: true
+  process_abstract: false
+  process_category: false
+  process_subcategory: false
 
 # Model specific
 model:
@@ -44,7 +47,7 @@ model:
 
 # Training parameters
 train:
-  batch_size: 16
+  batch_size: 64
   num_epochs: 5
   learning_rate: 0.0001
   early_stopping:
