@@ -306,11 +306,11 @@ def training_loop_orchestrator(
     )
 
     if wandb.run:
-        wandb.summary |= {
+        wandb.summary.update({
             "best_epoch": best_epoch_metrics.get("epoch_number"),
             "best_val_metric": best_epoch_metrics.get("average_metric_value"),
             **{f"best/{k}": v for k, v in best_epoch_metrics.items()},
-        }
+        })
         wandb.finish()
         console.log("Wandb session finished.")
 

@@ -54,7 +54,6 @@ def main_training_entry(cfg: DictConfig) -> None:
     )
     # Determine precision from the boolean flag
     use_mixed = cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else False
-    precision_string = "16" if use_mixed else "32"
     
     # Set global TensorFlow precision policy
     setup_tensorflow_precision(use_mixed)

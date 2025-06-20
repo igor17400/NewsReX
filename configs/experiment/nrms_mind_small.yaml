@@ -48,7 +48,7 @@ model:
 # Training parameters
 train:
   batch_size: 64
-  num_epochs: 5
+  num_epochs: 10
   learning_rate: 0.0001
   early_stopping:
     patience: 3
@@ -56,7 +56,7 @@ train:
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "BTC"
   experiment_name: nrms_mind_small
   log_every_n_steps: 100
@@ -70,4 +70,4 @@ sampling:
 
 device:
   gpu_ids: [ 0 ] # Use first GPU
-  mixed_precision: true
+  mixed_precision: false

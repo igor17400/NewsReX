@@ -93,7 +93,7 @@ class NRMS(BaseModel):
             name="title_word_self_attention",
         )(y, y, y)
 
-        # Apply dropout after attention
+        # Apply dropout after self-attention
         y = layers.Dropout(self.dropout_rate, seed=self.seed)(y)
 
         # Additive Attention to get a single news vector
@@ -138,7 +138,6 @@ class NRMS(BaseModel):
             kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
             name="browsed_news_self_attention",
         )(click_title_presents, click_title_presents, click_title_presents)
-        y = layers.Dropout(self.dropout_rate, seed=self.seed)(y)
 
         # Additive Attention to get a single user vector
         user_present = AdditiveAttentionLayer(
@@ -317,7 +316,6 @@ class NRMS(BaseModel):
         Raises:
             ValueError: If input format is invalid for inference
         """
-        print("#### hello! ####")
         # Case 1: Single candidate scoring
         if "single_candidate_tokens" in inputs:
             history = inputs["history_tokens"]
@@ -353,7 +351,6 @@ class NRMS(BaseModel):
             This method processes candidates one at a time to ensure proper batch handling
             and to maintain consistency with the scorer_model's expectations.
         """
-        print("#### _score_multiple_candidates ####")
         history_batch = inputs["hist_tokens"]  # Shape: (batch_size, history_len, title_len)
         candidates_batch = inputs["cand_tokens"]  # Shape: (batch_size, num_candidates, title_len)
 
