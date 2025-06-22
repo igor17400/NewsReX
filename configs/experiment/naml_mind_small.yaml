@@ -1,0 +1,75 @@
+# @package _global_
+defaults:
+- /sampling/base
+- _self_
+- override /model: naml
+- override /dataset: mind
+
+# Add seed back at root level
+seed: 42 # Global seed for reproducibility
+
+# Experiment name
+name: "naml_mind_small"
+description: "NAML model trained on MIND-small dataset"
+model_name: "NAML"
+
+# Dataset specific
+dataset:
+  name: "mind"
+  version: "small"
+  max_title_length: 32
+  max_abstract_length: 50
+  max_history_length: 50
+  use_knowledge_graph: false
+  random_train_samples: true
+  validation_split_strategy: "random"
+  process_title: true
+  process_abstract: true
+  process_category: true
+  process_subcategory: true
+
+# Model specific
+model:
+  embedding_size: 300 # word embedding size
+  category_embedding_dim: 100
+  subcategory_embedding_dim: 100
+  cnn_filter_num: 400
+  cnn_kernel_size: 3
+  word_attention_query_dim: 200
+  view_attention_query_dim: 200
+  user_attention_query_dim: 200
+  dropout_rate: 0.2
+  seed: 42
+  loss:
+    name: "categorical_crossentropy"
+    from_logits: false
+    reduction: "sum_over_batch_size"
+    label_smoothing: 0.0
+
+# Training parameters
+train:
+  batch_size: 64
+  num_epochs: 10
+  learning_rate: 0.0001
+  early_stopping:
+    patience: 3
+    min_improvement: 0.01
+
+# Logging
+logging:
+  enable_wandb: true
+  project_name: "BTC"
+  experiment_name: "naml_mind_small"
+  log_every_n_steps: 100
+
+# Sampling configuration
+sampling:
+  max_impressions_length: 5
+  strategy: "random"
+  random:
+    replace: false
+
+device:
+  gpu_ids: [ 0 ]
+  memory_limit: 2
+  mixed_precision: false

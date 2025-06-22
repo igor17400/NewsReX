@@ -1,11 +1,14 @@
 _target_: src.datasets.mind.MINDDataset
 
+# Inherit from base configuration
+defaults:
+- base
+
 # Dataset configuration
 name: "MIND"
 version: "small" # Options: small, large
 embedding_type: "glove" # Options: glove, bert
 embedding_size: 300 # Size of the embeddings
-random_seed: 42
 random_train_samples: false
 validation_split_strategy: "random" # Options: chronological, random
 validation_split_percentage: 0.05
@@ -23,7 +26,7 @@ urls:
 
 # Preprocessing parameters
 max_title_length: 30
-max_abstract_length: 100
+max_abstract_length: 50
 max_history_length: 50
 max_impressions_length: 5
 
@@ -32,3 +35,9 @@ use_knowledge_graph: false # Enable/disable knowledge graph processing
 
 # Pass sampling configuration directly
 sampling: ${sampling}
+
+# Process Title / Abstract / Category / Subcategory
+process_title: false
+process_abstract: false
+process_category: false
+process_subcategory: false

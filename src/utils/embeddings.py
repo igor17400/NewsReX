@@ -5,8 +5,12 @@ import numpy as np
 import requests
 import tensorflow as tf
 from rich.progress import Progress
-from transformers import BertTokenizer, TFBertModel
 import zipfile
+import urllib3
+from tensorflow import keras
+
+# Disable SSL verification warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from utils.cache_manager import CacheManager
 
@@ -16,12 +20,16 @@ logger = logging.getLogger("embeddings")
 class EmbeddingsManager:
     def __init__(self, cache_manager: CacheManager):
         self.cache_manager = cache_manager
-        self.glove_embeddings = None
-        self.embedding_matrix = None
-        self.vocab_size = None
-        self.embedding_dim = None
+        self.glove_embeddings: Optional[Dict[str, np.ndarray]] = None
+        self.embedding_matrix: Optional[tf.Tensor] = None
+        self.vocab_size: Optional[int] = None
+        self.embedding_dim: Optional[int] = None
         self.bert_model = None
         self.bert_tokenizer = None
+        self.category_embeddings: Optional[tf.Variable] = None
+        self.subcategory_embeddings: Optional[tf.Variable] = None
+        policy = keras.mixed_precision.global_policy()
+        self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
 
     def load_glove(self, dim: int = 300) -> None:
         """Load GloVe embeddings and create embedding matrix"""
@@ -37,7 +45,8 @@ class EmbeddingsManager:
         if npy_file.exists():
             logger.info("Loading GloVe embeddings from .npy file...")
             self.glove_embeddings = np.load(npy_file, allow_pickle=True).item()
-            logger.info(f"Loaded {len(self.glove_embeddings):,} word vectors from .npy")
+            if self.glove_embeddings:
+                logger.info(f"Loaded {len(self.glove_embeddings):,} word vectors from .npy")
 
             # Create embedding matrix
             self._create_embedding_matrix(dim)
@@ -62,7 +71,7 @@ class EmbeddingsManager:
                         # Join all elements except the last 300 as the word
                         word = "".join(values[:-dim])
                         # Take last 300 elements as the embedding
-                        vector = np.asarray(values[-dim:], dtype="float32")
+                        vector = np.asarray(values[-dim:], dtype=self.float_dtype.as_numpy_dtype)
                         self.glove_embeddings[word] = vector
                         progress.advance(task, len(line.encode("utf-8")))
                     except Exception as e:
@@ -71,7 +80,8 @@ class EmbeddingsManager:
 
         # Save embeddings for faster future loading
         logger.info("Saving embeddings to .npy format...")
-        np.save(npy_file, self.glove_embeddings)
+        if self.glove_embeddings is not None:
+            np.save(npy_file, self.glove_embeddings)  # type: ignore
 
         # Create embedding matrix
         self._create_embedding_matrix(dim)
@@ -86,7 +96,8 @@ class EmbeddingsManager:
         # Download the zip file
         with Progress() as progress:
             task = progress.add_task("Downloading GloVe...", total=None)
-            response = requests.get(url, stream=True)
+            # Disable SSL verification to handle expired certificates
+            response = requests.get(url, stream=True, verify=False)
             total_size = int(response.headers.get("content-length", 0))
             progress.update(task, total=total_size)
 
@@ -115,16 +126,21 @@ class EmbeddingsManager:
         Args:
             dim: The dimension of the GloVe embeddings.
         """
+        if self.glove_embeddings is None:
+            return
+
         self.embedding_dim = dim
         self.vocab_size = len(self.glove_embeddings)
 
         # Create embedding matrix
-        self.embedding_matrix = np.zeros((self.vocab_size + 1, dim))  # +1 for padding
+        embedding_matrix_np = np.zeros(
+            (self.vocab_size + 1, dim), dtype=self.float_dtype.as_numpy_dtype
+        )  # +1 for padding
         for idx, (word, vector) in enumerate(self.glove_embeddings.items(), 1):
-            self.embedding_matrix[idx] = vector
+            embedding_matrix_np[idx] = vector
 
         # Convert to TensorFlow constant
-        self.embedding_matrix = tf.constant(self.embedding_matrix, dtype=tf.float32)
+        self.embedding_matrix = tf.constant(embedding_matrix_np, dtype=self.float_dtype)  # type: ignore
 
     def get_glove_raw_data(
         self, dim: int = 300
@@ -143,9 +159,7 @@ class EmbeddingsManager:
             - A dictionary mapping words to their indices in the embedding tensor.
         """
         if self.glove_embeddings is None:
-            self.load_glove(
-                dim
-            )  # This loads into self.glove_embeddings (dict) and calls _create_embedding_matrix
+            self.load_glove(dim)
 
         if self.glove_embeddings is None:  # Still None after trying to load
             logger.error("GloVe embeddings could not be loaded.")
@@ -164,13 +178,15 @@ class EmbeddingsManager:
         # Placing it on CPU prevents potential GPU OOM errors when TF tries to allocate it.
         try:
             with tf.device("/cpu:0"):
-                raw_glove_tensor = tf.constant(glove_vectors_list, dtype=tf.float32)
+                raw_glove_tensor = tf.constant(glove_vectors_list, dtype=self.float_dtype)
         except Exception as e:
             logger.error(f"Error converting GloVe vectors list to tensor: {e}")
             # Fallback: try creating from individual tensors if there's a shape mismatch issue
             try:
                 with tf.device("/cpu:0"):
-                    raw_glove_tensor = tf.stack([tf.constant(v, dtype=tf.float32) for v in glove_vectors_list])
+                    raw_glove_tensor = tf.stack(
+                        [tf.constant(v, dtype=self.float_dtype) for v in glove_vectors_list]
+                    )
             except Exception as e_stack:
                 logger.error(f"Critical error: Could not create raw_glove_tensor: {e_stack}")
                 return None, None
@@ -196,3 +212,55 @@ class EmbeddingsManager:
             - A dictionary mapping words to their indices in the embedding tensor.
         """
         return self.get_glove_raw_data(dim)
+
+    def create_category_embeddings(
+        self, num_categories: int, embedding_dim: int = 100
+    ) -> tf.Variable:
+        """Create trainable category embeddings.
+        
+        Args:
+            num_categories: Number of unique categories
+            embedding_dim: Dimension of category embeddings
+            
+        Returns:
+            TensorFlow tensor of shape (num_categories, embedding_dim)
+        """
+        # Initialize with random normal distribution
+        initializer = tf.keras.initializers.GlorotNormal()
+        self.category_embeddings = tf.Variable(
+            initializer(shape=(num_categories, embedding_dim)),
+            trainable=True,
+            name="category_embeddings",
+            dtype=self.float_dtype,
+        )
+        return self.category_embeddings
+
+    def create_subcategory_embeddings(
+        self, num_subcategories: int, embedding_dim: int = 100
+    ) -> tf.Variable:
+        """Create trainable subcategory embeddings.
+        
+        Args:
+            num_subcategories: Number of unique subcategories
+            embedding_dim: Dimension of subcategory embeddings
+            
+        Returns:
+            TensorFlow tensor of shape (num_subcategories, embedding_dim)
+        """
+        # Initialize with random normal distribution
+        initializer = tf.keras.initializers.GlorotNormal()
+        self.subcategory_embeddings = tf.Variable(
+            initializer(shape=(num_subcategories, embedding_dim)),
+            trainable=True,
+            name="subcategory_embeddings",
+            dtype=self.float_dtype,
+        )
+        return self.subcategory_embeddings
+
+    def get_category_embeddings(self) -> Optional[tf.Variable]:
+        """Get category embeddings if they exist."""
+        return self.category_embeddings
+
+    def get_subcategory_embeddings(self) -> Optional[tf.Variable]:
+        """Get subcategory embeddings if they exist."""
+        return self.subcategory_embeddings

@@ -62,13 +62,13 @@ class BaseNewsDataset(ABC):
         pass
 
     @abstractmethod
-    def val_dataloader(self, batch_size: int) -> tf.data.Dataset:
-        """Create validation data loader"""
+    def user_history_dataloader(self, mode: str) -> tf.data.Dataset:
+        """Create user history data loader"""
         pass
 
     @abstractmethod
-    def test_dataloader(self, batch_size: int) -> tf.data.Dataset:
-        """Create test data loader"""
+    def news_dataloader(self) -> tf.data.Dataset:
+        """Create processed news data loader"""
         pass
 
     def download_and_extract(self, url: str, split: str) -> None:

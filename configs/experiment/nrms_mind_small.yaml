@@ -12,6 +12,7 @@ seed: 42 # Global seed for reproducibility
 # Experiment name
 name: "nrms_mind_small"
 description: "NRMS model trained on MIND-small dataset"
+model_name: "NRMS"
 
 # Dataset specific
 dataset:
@@ -22,6 +23,10 @@ dataset:
   use_knowledge_graph: false # Enable/disable knowledge graph processing
   random_train_samples: true
   validation_split_strategy: "random" # Options: chronological, random
+  process_title: true
+  process_abstract: false
+  process_category: false
+  process_subcategory: false
 
 # Model specific
 model:
@@ -31,19 +36,30 @@ model:
   attention_hidden_dim: 200
   dropout_rate: 0.2
   seed: 42
+  loss:
+    name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
+    # 'from_logits' specifies whether the model's output is raw logits (before activation) or probabilities (after softmax/sigmoid).
+    # Set to 'false' if your model outputs probabilities (e.g., after softmax or sigmoid).
+    # Set to 'true' if your model outputs raw, unnormalized scores (logits) and you want the loss function to apply the activation internally.
+    from_logits: false # Whether the model outputs logits or probabilities
+    reduction: "sum_over_batch_size"
+    label_smoothing: 0.0
 
 # Training parameters
 train:
   batch_size: 64
-  num_epochs: 5
+  num_epochs: 10
   learning_rate: 0.0001
-  early_stopping_patience: 4
+  early_stopping:
+    patience: 3
+    min_improvement: 0.01
 
 # Logging
 logging:
   enable_wandb: true
   project_name: "BTC"
   experiment_name: nrms_mind_small
+  log_every_n_steps: 100
 
 # Sampling configuration
 sampling:
@@ -54,5 +70,4 @@ sampling:
 
 device:
   gpu_ids: [ 0 ] # Use first GPU
-  memory_limit: 1
-  mixed_precision: true
+  mixed_precision: false

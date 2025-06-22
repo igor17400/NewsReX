@@ -1,18 +1,24 @@
 _target_: src.models.naml.NAML
 
-model:
-  word_embedding_dim: 300
-  category_embedding_dim: 100
-  num_attention_heads: 16
-  query_vector_dim: 200
+# Inherit from base configuration
+defaults:
+- base
 
-  # CNN parameters
-  cnn_filter_num: 400
-  cnn_kernel_size: 3
+# Word Embedding parameters
+embedding_size: 300
 
-  # Dense layers
-  dense_units: 400
-  news_embedding_dim: 400
+# News Encoder (NAMLNewsEncoder) parameters
+category_embedding_dim: 100
+subcategory_embedding_dim: 100
+cnn_filter_num: 400 # Number of filters for CNN (output dim for title/abs after CNN)
+cnn_kernel_size: 3
+word_attention_query_dim: 200 # dim for word-level attention
+view_attention_query_dim: 200 # dim for view-level attention
+user_attention_query_dim: 200 # Hidden dim for user attention
 
-  # Regularization
-  dropout_rate: 0.2
+# User Encoder (NAMLUserEncoder) parameters
+user_num_attention_heads: 10 # Must be a divisor of news_embedding_dim (e.g., 200/10 = 20 head_size)
+
+# Common parameters
+dropout_rate: 0.2
+seed: 42 # Model-specific seed, can be overridden by global seed

@@ -1,10 +1,10 @@
 # BTC: Behind The Curtains for Recommender Systems
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/release/python-380/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-BTC is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PytorchLightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
+BTC is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
 
 ## 🌟 Features
 
@@ -30,72 +30,106 @@ BTC is a modular and extensible framework for news recommendation systems resear
 
 ### Prerequisites
 
-1. Install Poetry (Python package manager):
-```bash
-curl -sSL https://install.python-poetry.org | python3 -
-```
+1.  **Install Conda** (if not already installed):
 
-2. Verify Poetry installation:
-```bash
-poetry --version
-```
+    ```bash
+    # Download and install Miniconda (or Anaconda)
+    wget [https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh](https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh)
+    bash Miniconda3-latest-Linux-x86_64.sh -b -p $HOME/miniconda # Install silently to your home directory
+    eval "$($HOME/miniconda/bin/conda shell hook)" # Initialize conda in your shell
+    ```
+    *Note: Adjust the Miniconda path if you install it elsewhere.*
 
-3. Make sure to use one Python version 
+2.  **Create and activate a Conda environment** with Python 3.11:
 
-```
-Python >=3.9,<3.12
-```
+    ```bash
+    conda create -n btc_env python=3.11 -y
+    conda activate btc_env
+    ```
+
+3.  **Install Poetry** (Python package manager) within your `btc_env`:
+
+    ```bash
+    conda install poetry -y
+    ```
+
+4.  **Verify Poetry's setup:**
+
+    ```bash
+    poetry --version
+    # This should show your Poetry version (e.g., Poetry (version 1.7.1))
+    ```
+    *Note: We will configure Poetry to use your conda environment in the next steps.*
 
 ### Installation
 
-1. Clone the repository:
-```bash
-git clone https://github.com/igor17400/BTC.git
-cd BTC
-```
+1.  **Clone the repository:**
 
-2. Configure Poetry to create virtual environment in project directory:
-```bash
-poetry config virtualenvs.in-project true
-```
+    ```bash
+    git clone [https://github.com/igor17400/BTC.git](https://github.com/igor17400/BTC.git)
+    cd BTC
+    ```
 
-3. Install dependencies and create virtual environment:
-```bash
-# Create virtual environment and install dependencies
-poetry install
+2.  **Point Poetry to your `btc_env` Conda environment:**
+    This step ensures Poetry uses your existing Python 3.11 environment.
 
-# Activate the virtual environment
-poetry shell
-```
+    ```bash
+    # First, ensure Poetry's cache directories exist (resolves common errors)
+    mkdir -p ~/.cache/pypoetry/virtualenvs
 
-4. Set up pre-commit hooks:
-```bash
-poetry run pre-commit install
-```
+    # Now, tell Poetry to use the Python from your active conda environment
+    poetry env use $(which python)
+    ```
+    *Expected output for `poetry env info` after this step:*
+    ```
+    Virtualenv
+    Python:          3.11.13
+    Implementation: CPython
+    Path:           /root/miniconda3/envs/btc_env  # Or your specific conda env path
+    Executable:     /root/miniconda3/envs/btc_env/bin/python
+    Valid:          True
+    ```
 
-5. You might need to install tensorflow with the following command to make it sure that it'll work with the GPUs
+3.  **Install project dependencies:**
+    Poetry will now install the project's dependencies into your `btc_env`.
 
-```bash
-pip install 'tensorflow[and-cuda]'
-```
+    ```bash
+    poetry install --no-root # '--no-root' prevents installing BTC as an editable package initially
+    ```
 
-To test it out if it worked we recommend executing the following commands:
+4.  **Activate Poetry's shell (optional but recommended for development):**
+    This puts your current shell into the Poetry-managed environment.
 
-```bash
-python test_tensorflow_gpu.py
-```
+    ```bash
+    poetry shell
+    ```
 
-Expected output:
+5.  **Set up pre-commit hooks:**
 
-```bash
-✅ If TensorFlow detects a GPU, it will list it.
-❌ If the output is an empty list ([]), TensorFlow is not using a GPU.
-```
+    ```bash
+    pre-commit install
+    ```
 
-Note: You can also run commands without activating the shell using `poetry run`, for example:
-```bash
-poetry run python src/train.py
-```
+6.  **Install TensorFlow with GPU support (if applicable):**
+    If you have an NVIDIA GPU, this step is crucial.
+
+    ```bash
+    poetry add 'tensorflow[and-cuda]'
+    ```
+
+    To test if TensorFlow is properly using your GPU:
+
+    ```bash
+    python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+    ```
+
+    *Expected output (example for GPU detected):*
+    ```
+    [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
+    ```
+    *If the output is `[]`, TensorFlow is not using a GPU.*
+
+*Note: You can always run commands without activating the Poetry shell using `poetry run`, for example: `poetry run python src/train.py`.*
 
 ### Training a Model
 
@@ -105,127 +139,3 @@ poetry run python src/train.py
 
 # Train NRMS on MIND-small
 poetry run python src/train.py experiment=nrms_mind_small
-```
-
-### Evaluation
-
-```bash
-# Evaluate the best model
-poetry run python src/test.py experiment=nrms_mind_small
-```
-
-## 📁 Project Structure
-
-```
-BTC/
-├── configs/                 # Hydra configuration files
-│   ├── config.yaml         # Base configuration
-│   ├── model/              # Model-specific configs
-│   └── dataset/            # Dataset-specific configs
-├── src/
-│   ├── models/             # Model implementations
-│   │   ├── base.py        # Abstract base classes
-│   │   ├── nrms.py        # NRMS implementation
-│   │   └── naml.py        # NAML implementation
-│   ├── datasets/           # Dataset implementations
-│   │   ├── base.py        # Abstract dataset class
-│   │   └── mind.py        # MIND dataset
-│   ├── utils/              # Utility functions
-│   │   └── metrics.py     # Evaluation metrics
-│   ├── train.py           # Training script
-│   └── test.py            # Testing script
-├── tests/                  # Unit tests
-├── pyproject.toml         # Poetry configuration
-└── README.md              # This file
-```
-
-## 📦 Metrics
-
-The framework provides comprehensive evaluation metrics:
-- AUC (Area Under ROC Curve)
-- MRR (Mean Reciprocal Rank)
-- nDCG@5 and nDCG@10 (Normalized Discounted Cumulative Gain)
-
-## 🔧 Configuration
-
-The project uses Hydra for configuration management. Key configuration files:
-
-- `configs/config.yaml`: Base configuration
-- `configs/model/*.yaml`: Model-specific configurations
-- `configs/dataset/*.yaml`: Dataset-specific configurations
-
-Example configuration override:
-```bash
-poetry run python src/train.py \
-    model=naml \
-    dataset.dataset.version=large \
-    train.batch_size=64 \
-    train.learning_rate=0.001
-```
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-poetry run pytest
-
-# Run tests with coverage
-poetry run pytest --cov=src
-```
-
-## 🚀 Experiment Tracking
-
-The framework integrates with Weights & Biases for experiment tracking:
-
-1. Set up your W&B account
-2. Enable tracking in config:
-```yaml
-logging:
-  enable_wandb: true
-  project_name: "your-project"
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
-
-## 📚 References
-
-- NRMS: [Neural News Recommendation with Multi-Head Self-Attention](https://aclanthology.org/D19-1671/)
-- NAML: [Neural News Recommendation with Attentive Multi-View Learning](https://www.ijcai.org/proceedings/2019/536)
-- MIND: [MIND: A Large-scale Dataset for News Recommendation](https://aclanthology.org/2020.acl-main.331/)
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🚀 Analytics and Visualization
-
-The framework provides rich analytics and visualization capabilities:
-
-### User Analytics
-- User reading patterns and preferences
-- Category and subcategory affinity
-- Temporal interaction patterns
-- Topic interest word clouds
-- Interactive user journey timelines
-
-### Content Analytics
-- Long-tail distribution analysis
-- Category and subcategory distributions
-- Click-through rate analysis
-- Time-of-day content preferences
-
-### Recommendation Analytics
-- Recommendation diversity metrics
-- Temporal recommendation distribution
-- Popularity vs. novelty analysis
-- Topic diversity visualization
-
-To generate visualizations:

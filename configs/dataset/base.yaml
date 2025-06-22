@@ -1,0 +1,4 @@
+# Base configuration for all datasets
+
+# Common dataset parameters
+seed: 42
