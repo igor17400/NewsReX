@@ -3,13 +3,13 @@
 defaults:
 - /sampling/base
 - _self_
-- override /model: nrms
+- override /model: lstur
 - override /dataset: mind
 
 # Experiment name
-name: "nrms_mind_small"
-description: "NRMS model trained on MIND-small dataset"
-model_name: "NRMS"
+name: "lstur_mind_small"
+description: "LSTUR model trained on MIND-small dataset"
+model_name: "LSTUR"
 
 # Global parameters
 seed: 42 # Global seed for reproducibility
@@ -26,23 +26,26 @@ dataset:
   random_train_samples: true
   validation_split_strategy: "random" # Options: chronological, random
   process_title: true
+  process_user_id: true
 
 # Model specific
 model:
   embedding_size: 300
-  multiheads: 20
-  head_dim: 32
+  user_embedding_dim: 100
+  cnn_filter_num: 400
+  cnn_kernel_size: 3
   attention_hidden_dim: 200
   dropout_rate: 0.2
+  activation: "relu"
+  num_users: 94057 # Total number of users in the datasets (train + validation + test)
+  user_representation_type: "lstm" # Options: "lstm" or "gru"
+  use_user_embeddings: true # Whether to use user ID embeddings (Long-term reprsentation)
   seed: ${seed}
   max_title_length: ${max_title_length}
   max_history_length: ${max_history_length}
   max_impressions_length: ${max_impressions_length}
   loss:
     name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
-    # 'from_logits' specifies whether the model's output is raw logits (before activation) or probabilities (after softmax/sigmoid).
-    # Set to 'false' if your model outputs probabilities (e.g., after softmax or sigmoid).
-    # Set to 'true' if your model outputs raw, unnormalized scores (logits) and you want the loss function to apply the activation internally.
     from_logits: false # Whether the model outputs logits or probabilities
     reduction: "sum_over_batch_size"
     label_smoothing: 0.0
@@ -58,9 +61,9 @@ train:
 
 # Logging
 logging:
-  enable_wandb: true
+  enable_wandb: false
   project_name: "BTC"
-  experiment_name: nrms_mind_small
+  experiment_name: lstur_mind_small
   log_every_n_steps: 100
 
 # Sampling configuration

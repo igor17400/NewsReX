@@ -73,9 +73,12 @@ class BaseModel(Model):
             "Computing user vectors...", total=len(user_dataloader), visible=True
         )
 
-        for impression_ids, features in user_dataloader:
+        for impression_ids, user_ids, features in user_dataloader:
             # Get user representation from history
-            user_vec = self.userencoder(features, training=False)
+            if self.process_user_id:
+                user_vec = self.userencoder([features, user_ids], training=False)
+            else:
+                user_vec = self.userencoder(features, training=False)
 
             # Store user vector for each impression in the batch
             for i, imp_id in enumerate(impression_ids):

@@ -5,22 +5,25 @@ defaults:
 - override /model: naml
 - override /dataset: mind
 
-# Add seed back at root level
-seed: 42 # Global seed for reproducibility
-
 # Experiment name
 name: "naml_mind_small"
 description: "NAML model trained on MIND-small dataset"
 model_name: "NAML"
 
+# Global parameters
+seed: 42 # Global seed for reproducibility
+max_title_length: 32
+max_history_length: 50
+max_impressions_length: 5
+max_abstract_length: 50
+
 # Dataset specific
 dataset:
   name: "mind"
   version: "small"
-  max_title_length: 32
-  max_abstract_length: 50
-  max_history_length: 50
-  use_knowledge_graph: false
+  max_title_length: ${max_title_length}
+  max_abstract_length: ${max_abstract_length}
+  max_history_length: ${max_history_length}
   random_train_samples: true
   validation_split_strategy: "random"
   process_title: true
@@ -39,7 +42,11 @@ model:
   view_attention_query_dim: 200
   user_attention_query_dim: 200
   dropout_rate: 0.2
-  seed: 42
+  seed: ${seed}
+  max_title_length: ${max_title_length}
+  max_abstract_length: ${max_abstract_length}
+  max_history_length: ${max_history_length}
+  max_impressions_length: ${max_impressions_length}
   loss:
     name: "categorical_crossentropy"
     from_logits: false

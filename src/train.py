@@ -66,7 +66,7 @@ def main_training_entry(cfg: DictConfig) -> None:
     setup_wandb_session(cfg)
 
     # Model and Dataset Initialization
-    nrms_model, dataset_provider = initialize_model_and_dataset(cfg)
+    model, dataset_provider = initialize_model_and_dataset(cfg)
 
     # Metrics Calculator
     metrics_engine = NewsRecommenderMetrics(
@@ -93,7 +93,7 @@ def main_training_entry(cfg: DictConfig) -> None:
     ) as global_progress_bar:
 
         training_loop_orchestrator(
-            nrms_model,
+            model,
             dataset_provider,
             cfg,
             metrics_engine,

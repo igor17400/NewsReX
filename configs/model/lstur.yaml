@@ -1,0 +1,24 @@
+_target_: src.models.lstur.LSTUR
+
+# Inherit from base configuration
+defaults:
+- base
+
+# Model-specific parameters
+user_embedding_dim: 100 # Dimension of user embeddings for long-term representation
+cnn_filter_num: 400 # Number of CNN filters for news encoding
+cnn_kernel_size: 3 # Kernel size for CNN
+attention_hidden_dim: 200 # Hidden dimension for additive attention
+dropout_rate: 0.2 # Dropout rate
+activation: "relu" # Activation function
+process_user_id: true # Mandatory for LSTUR
+
+# User representation parameters
+user_representation_type: "lstm" # "lstm" or "gru" for short-term user modeling
+use_user_embeddings: true # Whether to use user ID embeddings for long-term representation
+num_users: 100000 # Total number of users in the dataset (should be set based on actual data)
+
+# Loss configuration
+loss:
+  name: "categorical_crossentropy" # Must match our custom loss names in utils/losses.py
+  from_logits: false # Whether the model outputs logits or probabilities 

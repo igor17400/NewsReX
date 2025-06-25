@@ -102,6 +102,7 @@ class NewsDataLoader:
         candidate_news_abstract_tokens: tf.Tensor,
         candidate_news_category: tf.Tensor,
         candidate_news_subcategory: tf.Tensor,
+        user_ids: tf.Tensor,
         labels: tf.Tensor,
         batch_size: int,
         buffer_size: int = 10000,
@@ -109,6 +110,7 @@ class NewsDataLoader:
         process_abstract: bool = True,
         process_category: bool = True,
         process_subcategory: bool = True,
+        process_user_id: bool = False,
     ) -> tf.data.Dataset:
         """Create training dataset with fixed-length sequences."""
         features = {}
@@ -124,6 +126,8 @@ class NewsDataLoader:
         if process_subcategory:
             features["hist_subcategory"] = history_news_subcategory
             features["cand_subcategory"] = candidate_news_subcategory
+        if process_user_id:
+            features["user_ids"] = user_ids
 
         dataset = tf.data.Dataset.from_tensor_slices((features, labels))
         dataset = dataset.shuffle(buffer_size=buffer_size)
@@ -220,6 +224,7 @@ class UserHistoryBatchDataloader:
         history_category: List[List[int]],
         history_subcategory: List[List[int]],
         impression_ids: List[int],
+        user_ids: List[int] = None,
         batch_size: int = 32,
         process_title: bool = True,
         process_abstract: bool = True,
@@ -234,13 +239,20 @@ class UserHistoryBatchDataloader:
             history_category: List of user history category sequences
             history_subcategory: List of user history subcategory sequences
             impression_ids: List of impression IDs
+            user_ids: List of user IDs (optional)
             batch_size: Batch size for processing
+            process_title: Whether to process title tokens
+            process_abstract: Whether to process abstract tokens
+            process_category: Whether to process category tokens
+            process_subcategory: Whether to process subcategory tokens
+            process_user_id: Whether to include user IDs in output
         """
         self.history_tokens = history_tokens
         self.history_abstract_tokens = history_abstract_tokens
         self.history_category = history_category
         self.history_subcategory = history_subcategory
         self.impression_ids = impression_ids
+        self.user_ids = user_ids
         self.batch_size = batch_size
         self.num_users = len(impression_ids)
 
@@ -258,25 +270,34 @@ class UserHistoryBatchDataloader:
             batch_impression_ids = self.impression_ids[i:end_idx]
             batch_history_features = []
 
+            # Get user ids
+            batch_user_ids = tf.convert_to_tensor(self.user_ids[i:end_idx], dtype=tf.int32)
+
             if self.process_title:
-                batch_history_features.append(tf.convert_to_tensor(self.history_tokens[i:end_idx]))
+                batch_history_features.append(
+                    tf.convert_to_tensor(self.history_tokens[i:end_idx], dtype=tf.int32)
+                )
             if self.process_abstract:
                 batch_history_features.append(
-                    tf.convert_to_tensor(self.history_abstract_tokens[i:end_idx])
+                    tf.convert_to_tensor(self.history_abstract_tokens[i:end_idx], dtype=tf.int32)
                 )
             if self.process_category:
-                category_features = tf.convert_to_tensor(self.history_category[i:end_idx])
+                category_features = tf.convert_to_tensor(
+                    self.history_category[i:end_idx], dtype=tf.int32
+                )
                 category_features = tf.expand_dims(category_features, axis=-1)
                 batch_history_features.append(category_features)
             if self.process_subcategory:
-                subcategory_features = tf.convert_to_tensor(self.history_subcategory[i:end_idx])
+                subcategory_features = tf.convert_to_tensor(
+                    self.history_subcategory[i:end_idx], dtype=tf.int32
+                )
                 subcategory_features = tf.expand_dims(subcategory_features, axis=-1)
                 batch_history_features.append(subcategory_features)
 
-            # Concatenate features
+            # Concatenate history features
             batch_features = tf.concat(batch_history_features, axis=-1)
 
-            yield batch_impression_ids, batch_features
+            yield batch_impression_ids, batch_user_ids, batch_features
 
     def __len__(self):
         """Return the total number of users."""
