@@ -27,23 +27,23 @@ dataset:
   validation_split_strategy: "random" # Options: chronological, random
   process_title: true
   process_user_id: true
+  process_category: true
+  process_subcategory: true
 
 # Model specific
 model:
   embedding_size: 300
-  user_embedding_dim: 100
+  user_embedding_dim: 400
   cnn_filter_num: 400
   cnn_kernel_size: 3
+  category_embedding_dim: 100
+  subcategory_embedding_dim: 100
   attention_hidden_dim: 200
   dropout_rate: 0.2
-  activation: "relu"
+  cnn_activation: "relu"
   num_users: 94057 # Total number of users in the datasets (train + validation + test)
-  user_representation_type: "lstm" # Options: "lstm" or "gru"
-  use_user_embeddings: true # Whether to use user ID embeddings (Long-term reprsentation)
-  seed: ${seed}
-  max_title_length: ${max_title_length}
-  max_history_length: ${max_history_length}
-  max_impressions_length: ${max_impressions_length}
+  user_representation_type: "gru" # Options: "lstm" or "gru"
+  user_combination_type: "ini" # Options: "ini" or "con"
   loss:
     name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
     from_logits: false # Whether the model outputs logits or probabilities
@@ -56,12 +56,12 @@ train:
   num_epochs: 10
   learning_rate: 0.0001
   early_stopping:
-    patience: 3
+    patience: 5
     min_improvement: 0.01
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "BTC"
   experiment_name: lstur_mind_small
   log_every_n_steps: 100

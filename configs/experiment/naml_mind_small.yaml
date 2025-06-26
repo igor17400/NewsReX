@@ -42,11 +42,6 @@ model:
   view_attention_query_dim: 200
   user_attention_query_dim: 200
   dropout_rate: 0.2
-  seed: ${seed}
-  max_title_length: ${max_title_length}
-  max_abstract_length: ${max_abstract_length}
-  max_history_length: ${max_history_length}
-  max_impressions_length: ${max_impressions_length}
   loss:
     name: "categorical_crossentropy"
     from_logits: false

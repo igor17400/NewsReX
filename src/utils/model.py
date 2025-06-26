@@ -36,6 +36,10 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
         model_params["max_title_length"] = cfg.dataset.max_title_length
     if "max_abstract_length" in model_signature.parameters:
         model_params["max_abstract_length"] = cfg.dataset.max_abstract_length
+    if "max_history_length" in model_signature.parameters:
+        model_params["max_history_length"] = cfg.dataset.max_history_length
+    if "max_impressions_length" in model_signature.parameters:
+        model_params["max_impressions_length"] = cfg.dataset.max_impressions_length
 
     # Filter out any parameters that are not in the model's __init__ signature
     valid_params = {k: v for k, v in model_params.items() if k in model_signature.parameters}

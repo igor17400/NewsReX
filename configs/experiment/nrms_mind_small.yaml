@@ -34,10 +34,6 @@ model:
   head_dim: 32
   attention_hidden_dim: 200
   dropout_rate: 0.2
-  seed: ${seed}
-  max_title_length: ${max_title_length}
-  max_history_length: ${max_history_length}
-  max_impressions_length: ${max_impressions_length}
   loss:
     name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
     # 'from_logits' specifies whether the model's output is raw logits (before activation) or probabilities (after softmax/sigmoid).

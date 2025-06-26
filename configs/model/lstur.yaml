@@ -11,12 +11,18 @@ cnn_kernel_size: 3 # Kernel size for CNN
 attention_hidden_dim: 200 # Hidden dimension for additive attention
 dropout_rate: 0.2 # Dropout rate
 activation: "relu" # Activation function
-process_user_id: true # Mandatory for LSTUR
+
+# News encoder parameters
+category_embedding_dim: 100
+subcategory_embedding_dim: 100
+use_cat_subcat_encoder: true
 
 # User representation parameters
 user_representation_type: "lstm" # "lstm" or "gru" for short-term user modeling
+user_combination_type: "ini" # "ini" or "con" for combining long-term and short-term representations
 use_user_embeddings: true # Whether to use user ID embeddings for long-term representation
 num_users: 100000 # Total number of users in the dataset (should be set based on actual data)
+process_user_id: true # Only used in base model
 
 # Loss configuration
 loss:
