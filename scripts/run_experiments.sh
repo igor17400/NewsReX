@@ -15,6 +15,7 @@ NC='\033[0m' # No Color
 
 # Default experiments (can be overridden by command line arguments)
 DEFAULT_EXPERIMENTS=(
+    "lstur_mind_small"
     "naml_mind_small"
     "nrms_mind_small"
 )
@@ -40,6 +41,7 @@ print_usage() {
     echo "  $0 -d 10 naml_mind_small nrms_mind_small  # Run with 10s delay"
     echo ""
     echo "Available experiments:"
+    echo "  - lstur_mind_small"
     echo "  - naml_mind_small"
     echo "  - nrms_mind_small"
     echo "  - (add more as they become available)"

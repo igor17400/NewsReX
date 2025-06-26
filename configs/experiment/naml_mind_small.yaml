@@ -61,7 +61,7 @@ train:
 logging:
   enable_wandb: true
   project_name: "BTC"
-  experiment_name: "naml_mind_small"
+  experiment_name: "naml_mind_small_bs${train.batch_size}"
   log_every_n_steps: 100
 
 # Sampling configuration
