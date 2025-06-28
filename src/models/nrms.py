@@ -22,6 +22,7 @@ class NRMS(BaseModel):
         max_title_length: int = 50,
         max_history_length: int = 50,
         max_impressions_length: int = 5,
+        process_user_id: bool = False,  # Only used in base model
         name: str = "nrms",
         **kwargs,
     ):
@@ -32,6 +33,7 @@ class NRMS(BaseModel):
         self.head_dim = head_dim
         self.attention_hidden_dim = attention_hidden_dim
         self.dropout_rate = dropout_rate
+        self.process_user_id = process_user_id
         self.seed = seed
         self.max_title_length = max_title_length
         self.max_history_length = max_history_length
