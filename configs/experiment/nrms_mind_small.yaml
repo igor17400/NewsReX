@@ -6,27 +6,26 @@ defaults:
 - override /model: nrms
 - override /dataset: mind
 
-# Add seed back at root level
-seed: 42 # Global seed for reproducibility
-
 # Experiment name
 name: "nrms_mind_small"
 description: "NRMS model trained on MIND-small dataset"
 model_name: "NRMS"
 
+# Global parameters
+seed: 42 # Global seed for reproducibility
+max_title_length: 32
+max_history_length: 50
+max_impressions_length: 5
+
 # Dataset specific
 dataset:
   name: "mind"
   version: "small"
-  max_title_length: 32
-  max_history_length: 50
-  use_knowledge_graph: false # Enable/disable knowledge graph processing
+  max_title_length: ${max_title_length}
+  max_history_length: ${max_history_length}
   random_train_samples: true
   validation_split_strategy: "random" # Options: chronological, random
   process_title: true
-  process_abstract: false
-  process_category: false
-  process_subcategory: false
 
 # Model specific
 model:
@@ -35,7 +34,6 @@ model:
   head_dim: 32
   attention_hidden_dim: 200
   dropout_rate: 0.2
-  seed: 42
   loss:
     name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
     # 'from_logits' specifies whether the model's output is raw logits (before activation) or probabilities (after softmax/sigmoid).
@@ -47,7 +45,7 @@ model:
 
 # Training parameters
 train:
-  batch_size: 64
+  batch_size: 256
   num_epochs: 10
   learning_rate: 0.0001
   early_stopping:
@@ -58,7 +56,7 @@ train:
 logging:
   enable_wandb: true
   project_name: "BTC"
-  experiment_name: nrms_mind_small
+  experiment_name: nrms_mind_small_bs${train.batch_size}
   log_every_n_steps: 100
 
 # Sampling configuration

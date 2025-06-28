@@ -71,6 +71,7 @@ class NAML(BaseModel):
         activation: str = "relu",
         max_history_length: int = 50,
         max_impressions_length: int = 5,
+        process_user_id: bool = False,  # Only used in base model
         seed: int = 42,
         name: str = "naml",
         **kwargs,
@@ -92,6 +93,7 @@ class NAML(BaseModel):
         self.activation = activation
         self.max_history_length = max_history_length
         self.max_impressions_length = max_impressions_length
+        self.process_user_id = process_user_id
         self.seed = seed
 
         tf.random.set_seed(self.seed)
@@ -269,9 +271,9 @@ class NAML(BaseModel):
         concat_views = layers.Concatenate(axis=1)(
             [title_vector, abstract_vector, category_vector, subcategory_vector]
         )
-        news_vector = AdditiveAttentionLayer(
-            self.view_attention_query_dim, name="view_attention"
-        )(concat_views)
+        news_vector = AdditiveAttentionLayer(self.view_attention_query_dim, name="view_attention")(
+            concat_views
+        )
 
         return tf.keras.Model(news_input, news_vector, name="news_encoder")
 

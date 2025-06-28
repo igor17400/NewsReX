@@ -1,50 +1,52 @@
 # @package _global_
+
 defaults:
 - /sampling/base
 - _self_
-- override /model: naml
+- override /model: lstur
 - override /dataset: mind
 
 # Experiment name
-name: "naml_mind_small"
-description: "NAML model trained on MIND-small dataset"
-model_name: "NAML"
+name: "lstur_mind_small"
+description: "LSTUR model trained on MIND-small dataset"
+model_name: "LSTUR"
 
 # Global parameters
 seed: 42 # Global seed for reproducibility
 max_title_length: 32
 max_history_length: 50
 max_impressions_length: 5
-max_abstract_length: 50
 
 # Dataset specific
 dataset:
   name: "mind"
   version: "small"
   max_title_length: ${max_title_length}
-  max_abstract_length: ${max_abstract_length}
   max_history_length: ${max_history_length}
   random_train_samples: true
-  validation_split_strategy: "random"
+  validation_split_strategy: "random" # Options: chronological, random
   process_title: true
-  process_abstract: true
+  process_user_id: true
   process_category: true
   process_subcategory: true
 
 # Model specific
 model:
-  embedding_size: 300 # word embedding size
-  category_embedding_dim: 100
-  subcategory_embedding_dim: 100
+  embedding_size: 300
+  user_embedding_dim: 400
   cnn_filter_num: 400
   cnn_kernel_size: 3
-  word_attention_query_dim: 200
-  view_attention_query_dim: 200
-  user_attention_query_dim: 200
+  category_embedding_dim: 100
+  subcategory_embedding_dim: 100
+  attention_hidden_dim: 200
   dropout_rate: 0.2
+  cnn_activation: "relu"
+  num_users: 94057 # Total number of users in the datasets (train + validation + test)
+  user_representation_type: "gru" # Options: "lstm" or "gru"
+  user_combination_type: "ini" # Options: "ini" or "con"
   loss:
-    name: "categorical_crossentropy"
-    from_logits: false
+    name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
+    from_logits: false # Whether the model outputs logits or probabilities
     reduction: "sum_over_batch_size"
     label_smoothing: 0.0
 
@@ -54,14 +56,14 @@ train:
   num_epochs: 10
   learning_rate: 0.0001
   early_stopping:
-    patience: 3
+    patience: 5
     min_improvement: 0.01
 
 # Logging
 logging:
   enable_wandb: true
   project_name: "BTC"
-  experiment_name: "naml_mind_small_bs${train.batch_size}"
+  experiment_name: lstur_mind_small_bs${train.batch_size}
   log_every_n_steps: 100
 
 # Sampling configuration
@@ -72,6 +74,5 @@ sampling:
     replace: false
 
 device:
-  gpu_ids: [ 0 ]
-  memory_limit: 2
+  gpu_ids: [ 0 ] # Use first GPU
   mixed_precision: false

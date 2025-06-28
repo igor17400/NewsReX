@@ -22,7 +22,19 @@ from utils.cache_manager import CacheManager
 from utils.embeddings import EmbeddingsManager
 from utils.logging import setup_logging
 from utils.sampling import ImpressionSampler
-from datasets.utils import display_statistics, apply_data_fraction, string_is_number
+from datasets.utils import (
+    display_statistics,
+    apply_data_fraction,
+    string_is_number,
+    collect_basic_dataset_info,
+    collect_news_statistics,
+    collect_behavior_statistics,
+    collect_overall_statistics,
+    collect_quality_metrics,
+    reorder_summary_columns,
+    log_key_statistics,
+    save_unique_users_to_csv,
+)
 from datasets.dataloader import (
     NewsDataLoader,
     UserHistoryBatchDataloader,
@@ -65,6 +77,7 @@ class MINDDataset(BaseNewsDataset):
         process_abstract: bool = True,
         process_category: bool = True,
         process_subcategory: bool = True,
+        process_user_id: bool = False,
         max_entities: int = 1000,
         max_relations: int = 500,
     ):
@@ -93,6 +106,7 @@ class MINDDataset(BaseNewsDataset):
         self.process_abstract = process_abstract
         self.process_category = process_category
         self.process_subcategory = process_subcategory
+        self.process_user_id = process_user_id
         policy = keras.mixed_precision.global_policy()
         self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
 
@@ -709,6 +723,15 @@ class MINDDataset(BaseNewsDataset):
         with open(processed_path / "processed_test.pkl", "wb") as f:
             pickle.dump(test_behaviors_dict, f)
 
+        # Store the processed data in instance variables for summary generation
+        self.train_behaviors_data = train_behaviors_dict
+        self.val_behaviors_data = val_behaviors_dict
+        self.test_behaviors_data = test_behaviors_dict
+
+        # Generate dataset summary now that all data is available
+        logger.info("Generating dataset summary...")
+        self.generate_dataset_summary()
+
         # Preprocessing complete
         logger.info("Preprocessing complete!")
 
@@ -825,24 +848,26 @@ class MINDDataset(BaseNewsDataset):
             []
         )  # List of news IDs in the history of news articles clicked by the user
         history_news_tokens: List[list] = []  # Tokens for each news article in the history
-        history_news_abstract_tokens: List[
-            list
-        ] = []  # Abstract tokens for each news article in the history
+        history_news_abstract_tokens: List[list] = (
+            []
+        )  # Abstract tokens for each news article in the history
         history_news_categories: List[list] = []  # Categories for each news article in the history
-        history_news_subcategories: List[
-            list
-        ] = []  # Subcategories for each news article in the history
+        history_news_subcategories: List[list] = (
+            []
+        )  # Subcategories for each news article in the history
         candidate_news_ids: List[list] = []  # Candidate news IDs for each impression row
         candidate_news_tokens: List[list] = []  # Tokens for each candidate news article
-        candidate_news_abstract_tokens: List[
-            list
-        ] = []  # Abstract tokens for each candidate news article
+        candidate_news_abstract_tokens: List[list] = (
+            []
+        )  # Abstract tokens for each candidate news article
         candidate_news_categories: List[list] = []  # Categories for each candidate news article
-        candidate_news_subcategories: List[
-            list
-        ] = []  # Subcategories for each candidate news article
+        candidate_news_subcategories: List[list] = (
+            []
+        )  # Subcategories for each candidate news article
         labels: List[list] = []  # Labels for each candidate news article
-        impression_ids: List[int] = []  # IDs for each impression. That's the row in the behaviors.tsv file
+        impression_ids: List[int] = (
+            []
+        )  # IDs for each impression. That's the row in the behaviors.tsv file
         user_ids: List[str] = []  # IDs for each user
 
         # Statistics tracking
@@ -907,7 +932,7 @@ class MINDDataset(BaseNewsDataset):
             for _, row in behaviors_df.iterrows():
                 # Count positives in this row
                 impressions = str(row["impressions"]).split()
-                user_id = str(row["user_id"]).split("U")[1]
+                user_id = int(str(row["user_id"]).split("U")[1])
                 positives_count = sum(imp.split("-")[1] == "1" for imp in impressions)
 
                 total_positives += positives_count
@@ -1194,9 +1219,7 @@ class MINDDataset(BaseNewsDataset):
 
         # Filter by sampled users if provided
         if sampled_user_set is not None:
-            test_behaviors = test_behaviors[
-                test_behaviors["user_id"].isin(list(sampled_user_set))
-            ]
+            test_behaviors = test_behaviors[test_behaviors["user_id"].isin(list(sampled_user_set))]
 
         logger.info(f"Test behaviors: {len(test_behaviors):,}")
 
@@ -1220,11 +1243,13 @@ class MINDDataset(BaseNewsDataset):
             candidate_news_category=self.train_behaviors_data["candidate_news_categories"],
             candidate_news_subcategory=self.train_behaviors_data["candidate_news_subcategories"],
             labels=self.train_behaviors_data["labels"],
+            user_ids=self.train_behaviors_data["user_ids"],
             batch_size=batch_size,
             process_title=self.process_title,
             process_abstract=self.process_abstract,
             process_category=self.process_category,
             process_subcategory=self.process_subcategory,
+            process_user_id=self.process_user_id,
         )
 
     def user_history_dataloader(self, mode: str) -> UserHistoryBatchDataloader:
@@ -1235,12 +1260,14 @@ class MINDDataset(BaseNewsDataset):
             user_history_category = self.val_behaviors_data["history_news_categories"]
             user_history_subcategory = self.val_behaviors_data["history_news_subcategories"]
             impression_ids = self.val_behaviors_data["impression_ids"]
+            user_ids = self.val_behaviors_data["user_ids"]
         elif mode == "test":
             user_history_tokens = self.test_behaviors_data["history_news_tokens"]
             user_history_abstract_tokens = self.test_behaviors_data["history_news_abstract_tokens"]
             user_history_category = self.test_behaviors_data["history_news_categories"]
             user_history_subcategory = self.test_behaviors_data["history_news_subcategories"]
             impression_ids = self.test_behaviors_data["impression_ids"]
+            user_ids = self.test_behaviors_data["user_ids"]
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
@@ -1250,6 +1277,7 @@ class MINDDataset(BaseNewsDataset):
             history_category=user_history_category,
             history_subcategory=user_history_subcategory,
             impression_ids=impression_ids,
+            user_ids=user_ids,
             batch_size=512,
             process_title=self.process_title,
             process_abstract=self.process_abstract,
@@ -1438,3 +1466,56 @@ class MINDDataset(BaseNewsDataset):
                             terms = line.strip().split("\t")
                             if len(terms) == 101:  # entity + 100-dimensional embedding
                                 self.context_embeddings[terms[0]] = list(map(float, terms[1:]))
+
+    def generate_dataset_summary(self) -> None:
+        """Generate a comprehensive dataset summary CSV file with processed data statistics."""
+        logger.info("Generating dataset summary...")
+
+        # Create processed directory if it doesn't exist
+        processed_dir = self.dataset_path / "processed"
+        processed_dir.mkdir(exist_ok=True)
+
+        try:
+            # Initialize summary data dictionary
+            summary_data = {}
+
+            logger.info("Collecting basic dataset info...")
+            collect_basic_dataset_info(self, summary_data)
+
+            logger.info("Collecting news statistics...")
+            collect_news_statistics(self, summary_data)
+
+            logger.info("Collecting behavior statistics...")
+            collect_behavior_statistics(self, summary_data)
+
+            logger.info("Collecting overall statistics...")
+            collect_overall_statistics(self, summary_data)
+
+            logger.info("Collecting quality metrics...")
+            collect_quality_metrics(summary_data)
+
+            # Create DataFrame and save to CSV
+            logger.info("Creating DataFrame and saving to CSV...")
+            summary_df = pd.DataFrame([summary_data])
+            summary_df = reorder_summary_columns(summary_df)
+
+            # Save to CSV
+            summary_file_path = processed_dir / "datasets_summary.csv"
+            summary_df.to_csv(summary_file_path, index=False)
+
+            # Save unique user IDs to CSV
+            logger.info("Saving unique user IDs to CSV...")
+            save_unique_users_to_csv(self)
+
+            logger.info(f"Dataset summary saved to: {summary_file_path}")
+            logger.info(f"Summary contains {len(summary_data)} statistics")
+
+            # Log key statistics to console
+            log_key_statistics(summary_data)
+
+            return summary_file_path
+
+        except Exception as e:
+            logger.error(f"Error generating dataset summary: {e}")
+            logger.error("Continuing without summary generation...")
+            return None

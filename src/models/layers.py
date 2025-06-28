@@ -102,3 +102,60 @@ class AdditiveAttentionLayer(layers.Layer):
     def compute_output_shape(self, input_shape):
         """Computes the output shape of the layer."""
         return input_shape[0], input_shape[-1]
+
+
+class ComputeMasking(layers.Layer):
+    """Compute if inputs contains zero value.
+
+    Returns:
+        bool tensor: True for values not equal to zero.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def call(self, inputs, **kwargs):
+        """Call method for ComputeMasking.
+
+        Args:
+            inputs (object): input tensor.
+
+        Returns:
+            bool tensor: True for values not equal to zero.
+        """
+        mask = ops.not_equal(inputs, 0)
+        return ops.cast(mask, self.compute_dtype)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+
+class OverwriteMasking(layers.Layer):
+    """Set values at specific positions to zero.
+
+    Args:
+        inputs (list): value tensor and mask tensor.
+
+    Returns:
+        object: tensor after setting values to zero.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def build(self, input_shape):
+        super().build(input_shape)
+
+    def call(self, inputs, **kwargs):
+        """Call method for OverwriteMasking.
+
+        Args:
+            inputs (list): value tensor and mask tensor.
+
+        Returns:
+            object: tensor after setting values to zero.
+        """
+        return inputs[0] * ops.expand_dims(inputs[1], axis=-1)
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[0]
