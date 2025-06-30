@@ -4,8 +4,8 @@ import tensorflow as tf
 from tensorflow.keras import Model
 from rich.progress import Progress
 
-from utils.saving import save_predictions_to_file_fn
-from datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
+from src.utils.saving import save_predictions_to_file_fn
+from src.datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
 
 
 class BaseModel(Model):
