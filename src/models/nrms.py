@@ -1,6 +1,7 @@
 from typing import Tuple, Dict, Any
 
 import tensorflow as tf
+from tensorflow import keras
 from tensorflow.keras import layers
 
 from .layers import AdditiveAttentionLayer
@@ -50,7 +51,7 @@ class NRMS(BaseModel):
         self.embedding_layer = layers.Embedding(
             input_dim=self.vocab_size,
             output_dim=self.embedding_size,
-            embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
+            embeddings_initializer=keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
             mask_zero=False,
             name="word_embedding",
@@ -62,7 +63,7 @@ class NRMS(BaseModel):
         # Build the main training model and the scorer model
         self.training_model, self.scorer_model = self._build_graph_models()
 
-    def _build_newsencoder(self) -> tf.keras.Model:
+    def _build_newsencoder(self) -> keras.Model:
         """Build the news encoder component.
 
         The news encoder processes news titles through:
@@ -72,11 +73,11 @@ class NRMS(BaseModel):
         4. Additive attention to get a single news vector
 
         Returns:
-            tf.keras.Model: The news encoder model
+            keras.Model: The news encoder model
                 Input: (batch_size, title_length) - tokenized news titles
                 Output: (batch_size, embedding_dim) - news embeddings
         """
-        sequences_input_title = tf.keras.Input(
+        sequences_input_title = keras.Input(
             shape=(self.max_title_length,), dtype="int32", name="news_tokens_input"
         )
 
@@ -91,7 +92,7 @@ class NRMS(BaseModel):
             num_heads=self.multiheads,
             key_dim=self.head_dim,
             dropout=self.dropout_rate,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed),
             name="title_word_self_attention",
         )(y, y, y)
 
@@ -105,9 +106,9 @@ class NRMS(BaseModel):
             name="title_additive_attention",
         )(y)
 
-        return tf.keras.Model(sequences_input_title, pred_title, name="news_encoder")
+        return keras.Model(sequences_input_title, pred_title, name="news_encoder")
 
-    def _build_userencoder(self) -> tf.keras.Model:
+    def _build_userencoder(self) -> keras.Model:
         """Build the user encoder component.
 
         The user encoder processes user history through:
@@ -116,12 +117,12 @@ class NRMS(BaseModel):
         3. Additive attention to get a single user vector
 
         Returns:
-            tf.keras.Model: The user encoder model
+            keras.Model: The user encoder model
                 Input: (batch_size, history_length, title_length) - tokenized news history
                 Output: (batch_size, embedding_dim) - user embeddings
         """
         # Input shape: (batch_size, num_history_news, num_words_in_title)
-        his_input_title_tokens = tf.keras.Input(
+        his_input_title_tokens = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_news_tokens_input",
@@ -137,7 +138,7 @@ class NRMS(BaseModel):
             num_heads=self.multiheads,
             key_dim=self.head_dim,
             dropout=self.dropout_rate,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed),
             name="browsed_news_self_attention",
         )(click_title_presents, click_title_presents, click_title_presents)
 
@@ -148,9 +149,9 @@ class NRMS(BaseModel):
             name="user_additive_attention",
         )(y)
 
-        return tf.keras.Model(his_input_title_tokens, user_present, name="user_encoder")
+        return keras.Model(his_input_title_tokens, user_present, name="user_encoder")
 
-    def _build_graph_models(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
+    def _build_graph_models(self) -> Tuple[keras.Model, keras.Model]:
         """Build the training and scoring models.
 
         This method builds two models:
@@ -168,12 +169,12 @@ class NRMS(BaseModel):
                 - Scorer model
         """
         # --- Inputs for Training Model ---
-        history_tokens_input_train = tf.keras.Input(
+        history_tokens_input_train = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_tokens_train",
         )
-        candidate_tokens_input_train = tf.keras.Input(
+        candidate_tokens_input_train = keras.Input(
             shape=(self.max_impressions_length, self.max_title_length),
             dtype="int32",
             name="candidate_tokens_train",
@@ -196,19 +197,19 @@ class NRMS(BaseModel):
         # Apply softmax for training
         preds_train = layers.Activation("softmax", name="softmax_activation_train")(scores)
 
-        training_model = tf.keras.Model(
+        training_model = keras.Model(
             inputs=[history_tokens_input_train, candidate_tokens_input_train],
             outputs=preds_train,
             name="nrms_training_model",
         )
 
         # ------ Inputs for Scorer Model ------
-        history_tokens_input_score = tf.keras.Input(
+        history_tokens_input_score = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_tokens_score",
         )
-        single_candidate_tokens_input_score = tf.keras.Input(
+        single_candidate_tokens_input_score = keras.Input(
             shape=(self.max_title_length,),
             dtype="int32",
             name="single_candidate_tokens_score",
@@ -228,7 +229,7 @@ class NRMS(BaseModel):
         # Apply sigmoid for single prediction probability
         pred_score = layers.Activation("sigmoid", name="sigmoid_activation_score")(pred_score)
 
-        scorer_model = tf.keras.Model(
+        scorer_model = keras.Model(
             inputs=[history_tokens_input_score, single_candidate_tokens_input_score],
             outputs=pred_score,
             name="nrms_scorer_model",
@@ -364,25 +365,27 @@ class NRMS(BaseModel):
         # Process each item in the batch
         for i in range(batch_size):
             # Get history for current item
-            current_history = tf.expand_dims(
+            current_history = keras.ops.expand_dims(
                 history_batch[i], 0
             )  # Shape: (1, history_len, title_len)
 
             # Score each candidate against this history
             candidate_scores = []
             for j in range(num_candidates):
-                current_candidate = tf.expand_dims(
+                current_candidate = keras.ops.expand_dims(
                     candidates_batch[i, j], 0
                 )  # Shape: (1, title_len)
                 score = self.scorer_model([current_history, current_candidate], training=False)
                 candidate_scores.append(score)
 
             # Combine scores for all candidates of this item
-            item_scores = tf.concat(candidate_scores, axis=1)  # Shape: (1, num_candidates)
+            item_scores = keras.ops.concatenate(
+                candidate_scores, axis=1
+            )  # Shape: (1, num_candidates)
             all_scores.append(item_scores)
 
         # Combine scores for all items in batch
-        return tf.concat(all_scores, axis=0)  # Shape: (batch_size, num_candidates)
+        return keras.ops.concatenate(all_scores, axis=0)  # Shape: (batch_size, num_candidates)
 
     def get_config(self):
         """Returns the configuration of the NRMS model for serialization.

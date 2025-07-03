@@ -1,13 +1,14 @@
 from typing import Any, Dict, Optional, Tuple
 
 import tensorflow as tf
+from tensorflow import keras
 from tensorflow.keras import layers
 
 from .layers import AdditiveAttentionLayer
 from .base import BaseModel
 
 
-class NewsInputSplitter(tf.keras.layers.Layer):
+class NewsInputSplitter(keras.layers.Layer):
     """Splits a concatenated news input into its components (title, abstract, category, subcategory)."""
 
     def __init__(self, title_length: int, abstract_length: int, **kwargs):
@@ -120,15 +121,15 @@ class NAML(BaseModel):
         return layers.Embedding(
             input_dim=self.vocab_size,
             output_dim=self.embedding_size,
-            embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
+            embeddings_initializer=keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
             mask_zero=False,
             name="word_embedding",
         )
 
-    def _build_title_encoder(self) -> tf.keras.Model:
+    def _build_title_encoder(self) -> keras.Model:
         """Builds the title encoder which processes the title of a news article."""
-        input_title = tf.keras.Input(
+        input_title = keras.Input(
             shape=(self.max_title_length,), dtype="int32", name="title_tokens"
         )
         embedded_title = self.word_embedding_layer(input_title)
@@ -149,11 +150,11 @@ class NAML(BaseModel):
         )(title_dropout)
         title_vector = layers.Reshape((1, self.cnn_filter_num))(title_attention)
 
-        return tf.keras.Model(input_title, title_vector, name="title_encoder")
+        return keras.Model(input_title, title_vector, name="title_encoder")
 
-    def _build_abstract_encoder(self) -> tf.keras.Model:
+    def _build_abstract_encoder(self) -> keras.Model:
         """Builds the abstract encoder which processes the abstract of a news article."""
-        input_abstract = tf.keras.Input(
+        input_abstract = keras.Input(
             shape=(self.max_abstract_length,), dtype="int32", name="abstract_tokens"
         )
 
@@ -174,7 +175,7 @@ class NAML(BaseModel):
         )(abstract_dropout)
         abstract_vector = layers.Reshape((1, self.cnn_filter_num))(abstract_attention)
 
-        return tf.keras.Model(input_abstract, abstract_vector, name="abstract_encoder")
+        return keras.Model(input_abstract, abstract_vector, name="abstract_encoder")
 
     def _build_category_embedding_layer(self) -> layers.Embedding:
         """Builds the category embedding and projection layer.
@@ -184,7 +185,7 @@ class NAML(BaseModel):
         Returns:
             layers.Embedding: A Keras model that encodes category information.
         """
-        input_category = tf.keras.Input(shape=(1,), dtype="int32", name="category_id")
+        input_category = keras.Input(shape=(1,), dtype="int32", name="category_id")
 
         category_embedding = layers.Embedding(
             self.num_categories + 1,
@@ -197,13 +198,13 @@ class NAML(BaseModel):
         cat_dense = layers.Dense(
             self.cnn_filter_num,
             activation=self.activation,
-            bias_initializer=tf.keras.initializers.Zeros(),
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=keras.initializers.Zeros(),
+            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
             name="category_projection",
         )(cat_emb)
         cat_vector = layers.Reshape((1, self.cnn_filter_num))(cat_dense)
 
-        return tf.keras.Model(input_category, cat_vector, name="category_encoder")
+        return keras.Model(input_category, cat_vector, name="category_encoder")
 
     def _build_subcategory_embedding_layer(self) -> layers.Embedding:
         """Builds the subcategory embedding and projection layer.
@@ -213,7 +214,7 @@ class NAML(BaseModel):
         Returns:
             layers.Embedding: A Keras model that encodes subcategory information.
         """
-        input_subcategory = tf.keras.Input(shape=(1,), dtype="int32", name="subcategory_id")
+        input_subcategory = keras.Input(shape=(1,), dtype="int32", name="subcategory_id")
 
         subcategory_embedding = layers.Embedding(
             self.num_subcategories + 1,
@@ -226,19 +227,19 @@ class NAML(BaseModel):
         subcat_dense = layers.Dense(
             self.cnn_filter_num,
             activation=self.activation,
-            bias_initializer=tf.keras.initializers.Zeros(),
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=keras.initializers.Zeros(),
+            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
             name="subcategory_projection",
         )(subcat_emb)
         pred_subcat = layers.Reshape((1, self.cnn_filter_num))(subcat_dense)
-        return tf.keras.Model(input_subcategory, pred_subcat, name="subcategory_encoder")
+        return keras.Model(input_subcategory, pred_subcat, name="subcategory_encoder")
 
-    def _build_newsencoder(self) -> tf.keras.Model:
+    def _build_newsencoder(self) -> keras.Model:
         """Builds the news encoder which processes multiple views of a news article."""
         # --- Define Inputs for a single news article ---
         # news_input -> is the input that describes a single news article
         # It's composed of the title + abstract + category + subcategory (that's where the 2 comes from)
-        news_input = tf.keras.Input(
+        news_input = keras.Input(
             shape=(self.max_title_length + self.max_abstract_length + 2,),
             dtype="int32",
             name="news_tokens",
@@ -275,14 +276,14 @@ class NAML(BaseModel):
             concat_views
         )
 
-        return tf.keras.Model(news_input, news_vector, name="news_encoder")
+        return keras.Model(news_input, news_vector, name="news_encoder")
 
-    def _build_userencoder(self) -> tf.keras.Model:
+    def _build_userencoder(self) -> keras.Model:
         """Builds the user encoder which processes the user's news browsing history."""
         # --- Define Inputs for a user's history ---
         # his_input -> is the input for the news history from the user
         # It's composed of the title + abstract + category + subcategory (that's where the 2 comes from)
-        hist_input = tf.keras.Input(
+        hist_input = keras.Input(
             shape=(self.max_history_length, self.max_title_length + self.max_abstract_length + 2),
             dtype="int32",
             name="hist_tokens",
@@ -296,31 +297,31 @@ class NAML(BaseModel):
             self.user_attention_query_dim, name="user_additive_attention"
         )(news_vectors)
 
-        return tf.keras.Model(hist_input, user_representation, name="user_encoder")
+        return keras.Model(hist_input, user_representation, name="user_encoder")
 
-    def _build_graph_models(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
+    def _build_graph_models(self) -> Tuple[keras.Model, keras.Model]:
         """Builds the main training and scoring models."""
         # --- Inputs for Training Model ---
 
         # History Inputs
-        hist_title_tokens = tf.keras.Input(
+        hist_title_tokens = keras.Input(
             shape=(self.max_history_length, self.max_title_length), dtype="int32"
         )
-        hist_abstract_tokens = tf.keras.Input(
+        hist_abstract_tokens = keras.Input(
             shape=(self.max_history_length, self.max_abstract_length), dtype="int32"
         )
-        hist_category = tf.keras.Input(shape=(self.max_history_length, 1), dtype="int32")
-        hist_subcategory = tf.keras.Input(shape=(self.max_history_length, 1), dtype="int32")
+        hist_category = keras.Input(shape=(self.max_history_length, 1), dtype="int32")
+        hist_subcategory = keras.Input(shape=(self.max_history_length, 1), dtype="int32")
 
         # Candidate Inputs
-        cand_title_tokens = tf.keras.Input(
+        cand_title_tokens = keras.Input(
             shape=(self.max_impressions_length, self.max_title_length), dtype="int32"
         )
-        cand_abstract_tokens = tf.keras.Input(
+        cand_abstract_tokens = keras.Input(
             shape=(self.max_impressions_length, self.max_abstract_length), dtype="int32"
         )
-        cand_category = tf.keras.Input(shape=(self.max_impressions_length, 1), dtype="int32")
-        cand_subcategory = tf.keras.Input(shape=(self.max_impressions_length, 1), dtype="int32")
+        cand_category = keras.Input(shape=(self.max_impressions_length, 1), dtype="int32")
+        cand_subcategory = keras.Input(shape=(self.max_impressions_length, 1), dtype="int32")
 
         # Concatenate inputs
         history_concat = layers.Concatenate(axis=-1)(
@@ -351,7 +352,7 @@ class NAML(BaseModel):
         )
         preds_train = layers.Activation("softmax", name="softmax_activation_train")(scores)
 
-        training_model = tf.keras.Model(
+        training_model = keras.Model(
             inputs=[history_concat, candidate_concat],
             outputs=preds_train,
             name="naml_training_model",
@@ -359,26 +360,24 @@ class NAML(BaseModel):
 
         # --- Inputs for Scorer Model ---
         # History Inputs
-        hist_tokens_input_score = tf.keras.Input(
+        hist_tokens_input_score = keras.Input(
             shape=(self.max_history_length, self.max_title_length), dtype="int32"
         )
-        hist_abstract_tokens_input_score = tf.keras.Input(
+        hist_abstract_tokens_input_score = keras.Input(
             shape=(self.max_history_length, self.max_abstract_length), dtype="int32"
         )
-        hist_category_input_score = tf.keras.Input(
-            shape=(self.max_history_length, 1), dtype="int32"
-        )
-        hist_subcategory_input_score = tf.keras.Input(
+        hist_category_input_score = keras.Input(shape=(self.max_history_length, 1), dtype="int32")
+        hist_subcategory_input_score = keras.Input(
             shape=(self.max_history_length, 1), dtype="int32"
         )
 
         # Candidate Inputs
-        cand_tokens_input_score = tf.keras.Input(shape=(1, self.max_title_length), dtype="int32")
-        cand_abstract_tokens_input_score = tf.keras.Input(
+        cand_tokens_input_score = keras.Input(shape=(1, self.max_title_length), dtype="int32")
+        cand_abstract_tokens_input_score = keras.Input(
             shape=(1, self.max_abstract_length), dtype="int32"
         )
-        cand_category_input_score = tf.keras.Input(shape=(1, 1), dtype="int32")
-        cand_subcategory_input_score = tf.keras.Input(shape=(1, 1), dtype="int32")
+        cand_category_input_score = keras.Input(shape=(1, 1), dtype="int32")
+        cand_subcategory_input_score = keras.Input(shape=(1, 1), dtype="int32")
 
         history_concat_score = layers.Concatenate(axis=-1)(
             [
@@ -407,7 +406,7 @@ class NAML(BaseModel):
         )
         pred_score = layers.Activation("sigmoid", name="sigmoid_activation_score")(pred_score)
 
-        scorer_model = tf.keras.Model(
+        scorer_model = keras.Model(
             inputs=[history_concat_score, candidate_concat_score],
             outputs=pred_score,
             name="naml_scorer_model",
@@ -456,18 +455,18 @@ class NAML(BaseModel):
         cand_subcategory = inputs["cand_subcategory"]
 
         # Reshape category and subcategory tensors to match the expected input shape
-        hist_category = tf.expand_dims(hist_category, axis=-1)
-        hist_subcategory = tf.expand_dims(hist_subcategory, axis=-1)
-        cand_category = tf.expand_dims(cand_category, axis=-1)
-        cand_subcategory = tf.expand_dims(cand_subcategory, axis=-1)
+        hist_category = keras.ops.expand_dims(hist_category, axis=-1)
+        hist_subcategory = keras.ops.expand_dims(hist_subcategory, axis=-1)
+        cand_category = keras.ops.expand_dims(cand_category, axis=-1)
+        cand_subcategory = keras.ops.expand_dims(cand_subcategory, axis=-1)
 
         # Concatenate features for history
-        hist_features = tf.concat(
+        hist_features = keras.ops.concatenate(
             [hist_title_tokens, hist_abstract_tokens, hist_category, hist_subcategory], axis=-1
         )
 
         # Concatenate features for candidates
-        cand_features = tf.concat(
+        cand_features = keras.ops.concatenate(
             [cand_title_tokens, cand_abstract_tokens, cand_category, cand_subcategory], axis=-1
         )
 
@@ -507,10 +506,10 @@ class NAML(BaseModel):
                 score = self.scorer_model({**current_history, **current_candidate})
                 candidate_scores.append(score)
 
-            item_scores = tf.concat(candidate_scores, axis=1)
+            item_scores = keras.ops.concatenate(candidate_scores, axis=1)
             all_scores.append(item_scores)
 
-        return tf.concat(all_scores, axis=0)
+        return keras.ops.concatenate(all_scores, axis=0)
 
     def get_config(self):
         config = super().get_config()
