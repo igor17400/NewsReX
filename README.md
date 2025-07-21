@@ -4,21 +4,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-BTC is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
+BTC is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. The framework has been optimized with **Keras 3 + JAX backend** for enhanced performance through JIT compilation and XLA acceleration. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
 
 ## 🌟 Features
 
 - 📚 Multiple SOTA news recommendation models
+- ⚡ **JAX Backend Optimization**: Keras 3 + JAX for JIT compilation and XLA acceleration
 - 🔄 Easy-to-use training and evaluation pipeline
-- 📦 Comprehensive metrics and evaluation
+- 📦 Comprehensive JAX-optimized metrics and evaluation
 - 🎛️ Hydra-based configuration system
 - 🚀 Weights & Biases integration for experiment tracking
 - 🔌 Modular design for easy extension
+- 🚀 **Performance**: Faster training and inference through JAX optimizations
 
 ## 🏗️ Supported Models
 
-- **NRMS**: Neural News Recommendation with Multi-Head Self-Attention
+- **NRMS**: Neural News Recommendation with Multi-Head Self-Attention (Keras 3 + JAX)
 - **NAML**: Neural News Recommendation with Attentive Multi-View Learning
+- **LSTUR**: Long- and Short-term User Representations
 - *(More models coming soon)*
 
 ## 📦 Supported Datasets
@@ -110,32 +113,30 @@ BTC is a modular and extensible framework for news recommendation systems resear
     pre-commit install
     ```
 
-6.  **Install TensorFlow with GPU support (if applicable):**
-    If you have an NVIDIA GPU, this step is crucial.
+6.  **Install JAX Backend Dependencies:**
+    For performance optimization with Keras 3 + JAX backend:
 
     ```bash
-    poetry add 'tensorflow[and-cuda]'
+    pip install -r requirements_keras3_jax.txt
     ```
 
-    To test if TensorFlow is properly using your GPU:
+    To test if JAX is properly using your GPU:
 
     ```bash
-    python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+    python test_jax_gpu.py
     ```
 
     *Expected output (example for GPU detected):*
     ```
-    [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
+    gpu
     ```
-    *If the output is `[]`, TensorFlow is not using a GPU.*
+    *If the output is `cpu`, JAX is not using a GPU.*
 
 *Note: You can always run commands without activating the Poetry shell using `poetry run`, for example: `poetry run python src/train.py`.*
 
 ### Training a Model
 
 ```bash
-# Train with default configuration (NRMS on MIND-small)
-poetry run python src/train.py
-
-# Train NRMS on MIND-small
+# Train with JAX backend
 poetry run python src/train.py experiment=nrms_mind_small
+```

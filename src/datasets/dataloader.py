@@ -1,5 +1,5 @@
-import tensorflow as tf
-from typing import List
+import keras
+from typing import List, Any, Iterator, Tuple, Dict
 import numpy as np
 
 
@@ -39,8 +39,14 @@ class ImpressionIterator:
         self.impression_ids = impression_ids
         self.candidate_ids = candidate_ids
         self.num_impressions = len(labels)
-        policy = tf.keras.mixed_precision.global_policy()
-        self.float_dtype = policy.compute_dtype
+        policy = keras.mixed_precision.global_policy()
+        # Convert string dtype to appropriate dtype string for Keras 3
+        if policy.compute_dtype == "mixed_float16":
+            self.float_dtype = "float16"
+        elif policy.compute_dtype == "float16":
+            self.float_dtype = "float16"
+        else:
+            self.float_dtype = "float32"
 
         self.process_title = process_title
         self.process_abstract = process_abstract
@@ -73,14 +79,13 @@ class ImpressionIterator:
                 impression_features.append(subcategory)
 
             # Convert to tensors and concatenate
+            concatenated_features = keras.ops.concatenate(impression_features, axis=-1)
             features = {
-                "impression_features": tf.constant(
-                    tf.concat(impression_features, axis=-1), dtype=tf.int32
-                )
+                "impression_features": keras.ops.cast(concatenated_features, "int32")
             }
-            labels = tf.constant(self.labels[idx], dtype=self.float_dtype)
-            impression_id = tf.constant([self.impression_ids[idx]], dtype=tf.int32)
-            candidate_ids = tf.constant([self.candidate_ids[idx]], dtype=tf.int32)
+            labels = keras.ops.cast(keras.ops.convert_to_tensor(self.labels[idx]), self.float_dtype)
+            impression_id = keras.ops.cast(keras.ops.convert_to_tensor([self.impression_ids[idx]]), "int32")
+            candidate_ids = keras.ops.cast(keras.ops.convert_to_tensor([self.candidate_ids[idx]]), "int32")
 
             yield features, labels, impression_id, candidate_ids
 
@@ -94,16 +99,16 @@ class NewsDataLoader:
 
     @staticmethod
     def create_train_dataset(
-        history_news_tokens: tf.Tensor,
-        history_news_abstract_tokens: tf.Tensor,
-        history_news_category: tf.Tensor,
-        history_news_subcategory: tf.Tensor,
-        candidate_news_tokens: tf.Tensor,
-        candidate_news_abstract_tokens: tf.Tensor,
-        candidate_news_category: tf.Tensor,
-        candidate_news_subcategory: tf.Tensor,
-        user_ids: tf.Tensor,
-        labels: tf.Tensor,
+        history_news_tokens: keras.KerasTensor,
+        history_news_abstract_tokens: keras.KerasTensor,
+        history_news_category: keras.KerasTensor,
+        history_news_subcategory: keras.KerasTensor,
+        candidate_news_tokens: keras.KerasTensor,
+        candidate_news_abstract_tokens: keras.KerasTensor,
+        candidate_news_category: keras.KerasTensor,
+        candidate_news_subcategory: keras.KerasTensor,
+        user_ids: keras.KerasTensor,
+        labels: keras.KerasTensor,
         batch_size: int,
         buffer_size: int = 10000,
         process_title: bool = True,
@@ -111,7 +116,7 @@ class NewsDataLoader:
         process_category: bool = True,
         process_subcategory: bool = True,
         process_user_id: bool = False,
-    ) -> tf.data.Dataset:
+    ) -> Any:
         """Create training dataset with fixed-length sequences."""
         features = {}
         if process_title:
@@ -129,12 +134,30 @@ class NewsDataLoader:
         if process_user_id:
             features["user_ids"] = user_ids
 
-        dataset = tf.data.Dataset.from_tensor_slices((features, labels))
-        dataset = dataset.shuffle(buffer_size=buffer_size)
-        dataset = dataset.batch(batch_size)
-        dataset = dataset.prefetch(tf.data.AUTOTUNE)
-
-        return dataset
+        # For Keras 3 backend-agnostic approach, create a simple generator
+        def data_generator():
+            # Convert to numpy arrays for slicing
+            feature_arrays = {key: keras.ops.convert_to_numpy(value) for key, value in features.items()}
+            label_array = keras.ops.convert_to_numpy(labels)
+            num_samples = len(label_array)
+            
+            # Create indices and shuffle
+            indices = np.arange(num_samples)
+            np.random.shuffle(indices)
+            
+            for i in range(0, num_samples, batch_size):
+                end_idx = min(i + batch_size, num_samples)
+                batch_indices = indices[i:end_idx]
+                
+                batch_features = {
+                    key: keras.ops.convert_to_tensor(value[batch_indices])
+                    for key, value in feature_arrays.items()
+                }
+                batch_labels = keras.ops.convert_to_tensor(label_array[batch_indices])
+                
+                yield batch_features, batch_labels
+        
+        return data_generator()
 
 
 class NewsBatchDataloader:
@@ -142,11 +165,11 @@ class NewsBatchDataloader:
 
     def __init__(
         self,
-        news_ids: tf.Tensor,
-        news_tokens: tf.Tensor,
-        news_abstract_tokens: tf.Tensor,
-        news_category_indices: tf.Tensor,
-        news_subcategory_indices: tf.Tensor,
+        news_ids: np.ndarray,
+        news_tokens: keras.KerasTensor,
+        news_abstract_tokens: keras.KerasTensor,
+        news_category_indices: keras.KerasTensor,
+        news_subcategory_indices: keras.KerasTensor,
         batch_size: int = 1024,
         process_title: bool = True,
         process_abstract: bool = True,
@@ -190,9 +213,9 @@ class NewsBatchDataloader:
 
             # Ensure all tensors have the same rank by expanding dimensions if needed
             if len(batch_category.shape) == 1:
-                batch_category = tf.expand_dims(batch_category, axis=1)
+                batch_category = keras.ops.expand_dims(batch_category, axis=1)
             if len(batch_subcategory.shape) == 1:
-                batch_subcategory = tf.expand_dims(batch_subcategory, axis=1)
+                batch_subcategory = keras.ops.expand_dims(batch_subcategory, axis=1)
 
             batch_features = []
             if self.process_title:
@@ -205,7 +228,7 @@ class NewsBatchDataloader:
                 batch_features.append(batch_subcategory)
 
             # Concatenate features
-            batch_features = tf.concat(batch_features, axis=1)
+            batch_features = keras.ops.concatenate(batch_features, axis=1)
 
             yield {"news_id": batch_ids, "news_features": batch_features}
 
@@ -271,31 +294,31 @@ class UserHistoryBatchDataloader:
             batch_history_features = []
 
             # Get user ids
-            batch_user_ids = tf.convert_to_tensor(self.user_ids[i:end_idx], dtype=tf.int32)
+            batch_user_ids = keras.ops.cast(keras.ops.convert_to_tensor(self.user_ids[i:end_idx]), "int32")
 
             if self.process_title:
                 batch_history_features.append(
-                    tf.convert_to_tensor(self.history_tokens[i:end_idx], dtype=tf.int32)
+                    keras.ops.cast(keras.ops.convert_to_tensor(self.history_tokens[i:end_idx]), "int32")
                 )
             if self.process_abstract:
                 batch_history_features.append(
-                    tf.convert_to_tensor(self.history_abstract_tokens[i:end_idx], dtype=tf.int32)
+                    keras.ops.cast(keras.ops.convert_to_tensor(self.history_abstract_tokens[i:end_idx]), "int32")
                 )
             if self.process_category:
-                category_features = tf.convert_to_tensor(
-                    self.history_category[i:end_idx], dtype=tf.int32
+                category_features = keras.ops.cast(
+                    keras.ops.convert_to_tensor(self.history_category[i:end_idx]), "int32"
                 )
-                category_features = tf.expand_dims(category_features, axis=-1)
+                category_features = keras.ops.expand_dims(category_features, axis=-1)
                 batch_history_features.append(category_features)
             if self.process_subcategory:
-                subcategory_features = tf.convert_to_tensor(
-                    self.history_subcategory[i:end_idx], dtype=tf.int32
+                subcategory_features = keras.ops.cast(
+                    keras.ops.convert_to_tensor(self.history_subcategory[i:end_idx]), "int32"
                 )
-                subcategory_features = tf.expand_dims(subcategory_features, axis=-1)
+                subcategory_features = keras.ops.expand_dims(subcategory_features, axis=-1)
                 batch_history_features.append(subcategory_features)
 
             # Concatenate history features
-            batch_features = tf.concat(batch_history_features, axis=-1)
+            batch_features = keras.ops.concatenate(batch_history_features, axis=-1)
 
             yield batch_impression_ids, batch_user_ids, batch_features
 

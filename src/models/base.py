@@ -1,14 +1,14 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import Model
+import keras
+from keras import ops
 from rich.progress import Progress
 
-from utils.saving import save_predictions_to_file_fn
-from datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
+from src.utils.saving import save_predictions_to_file_fn
+from src.datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
 
 
-class BaseModel(Model):
+class BaseModel(keras.Model):
     """Base class for news recommendation models.
 
     This class provides common functionality for news recommendation models,
@@ -17,8 +17,12 @@ class BaseModel(Model):
 
     def __init__(self, name: str = "base_news_recommender"):
         super().__init__(name=name)
-        policy = tf.keras.mixed_precision.global_policy()
-        self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
+        
+        # Attributes to be set by subclasses
+        self.newsencoder: Optional[keras.Model] = None
+        self.userencoder: Optional[keras.Model] = None 
+        self.process_user_id: bool = False
+        self.float_dtype: str = "float32"  # Will be set by training config
 
     def precompute_news_vectors(
         self,
@@ -46,10 +50,12 @@ class BaseModel(Model):
             news_ids = batch["news_id"]
             news_features = batch["news_features"]
 
-            batch_vecs = self.newsencoder(news_features, training=False).numpy()
+            if self.newsencoder is None:
+                raise RuntimeError("News Encoder not initialized. Ensure the model is properly built.")
+            batch_vecs = ops.convert_to_numpy(self.newsencoder(news_features, training=False))
 
             for i, news_id in enumerate(news_ids):
-                news_vecs_dict[news_id.numpy().decode("utf-8")] = batch_vecs[i]
+                news_vecs_dict[ops.convert_to_numpy(news_id).item()] = batch_vecs[i]
 
             progress.update(news_progress, advance=len(news_ids))
 
@@ -73,6 +79,9 @@ class BaseModel(Model):
             "Computing user vectors...", total=len(user_dataloader), visible=True
         )
 
+        if self.userencoder is None:
+            raise RuntimeError("User Encoder not initialized. Ensure the model is properly built.")
+
         for impression_ids, user_ids, features in user_dataloader:
             # Get user representation from history
             if self.process_user_id:
@@ -82,7 +91,7 @@ class BaseModel(Model):
 
             # Store user vector for each impression in the batch
             for i, imp_id in enumerate(impression_ids):
-                user_vecs_dict[int(imp_id)] = user_vec[i].numpy()
+                user_vecs_dict[int(imp_id)] = ops.convert_to_numpy(user_vec[i])
 
             progress.update(user_progress, advance=len(impression_ids))
 
@@ -122,10 +131,10 @@ class BaseModel(Model):
             _, labels, impression_id, cand_ids = impression
 
             # Get user vector for this impression
-            user_vector = user_vecs_dict[impression_id.numpy()[0]]
+            user_vector = user_vecs_dict[ops.convert_to_numpy(impression_id)[0]]
 
             # Get news vectors for candidate news
-            cand_ids_np = cand_ids.numpy()[0]  # Get numpy array of candidate IDs
+            cand_ids_np = ops.convert_to_numpy(cand_ids)[0]  # Get numpy array of candidate IDs
             news_vectors = []
             for nid in cand_ids_np:
                 news_key = f"N{str(nid)}"
@@ -139,12 +148,12 @@ class BaseModel(Model):
             else:
                 scores = np.dot(np.stack(news_vectors, axis=0), user_vector)
 
-            group_labels_list.append(labels.numpy())
+            group_labels_list.append(ops.convert_to_numpy(labels))
             group_preds_list.append(scores)
 
             if save_predictions_path:
-                predictions_to_save[str(cand_ids.numpy())] = (
-                    labels.numpy().tolist(),
+                predictions_to_save[str(ops.convert_to_numpy(cand_ids))] = (
+                    ops.convert_to_numpy(labels).tolist(),
                     scores.tolist(),
                 )
 
@@ -209,14 +218,14 @@ class BaseModel(Model):
                 continue
 
             # For loss calculation, convert to tensors
-            labels_tf = tf.constant([labels_np], dtype=self.float_dtype)
-            scores_tf_logits = tf.constant([scores_np], dtype=self.float_dtype)
-            scores_tf_probs = tf.nn.softmax(scores_tf_logits, axis=-1)
+            labels_tensor = ops.convert_to_tensor([labels_np], dtype=self.float_dtype)
+            scores_logits_tensor = ops.convert_to_tensor([scores_np], dtype=self.float_dtype)
+            scores_probs_tensor = ops.softmax(scores_logits_tensor, axis=-1)
 
             try:
-                loss = self.compute_loss(y=labels_tf, y_pred=scores_tf_probs, training=False)
+                loss = self.compute_loss(y=labels_tensor, y_pred=scores_probs_tensor, training=False)
                 if loss is not None:
-                    val_loss_total += loss.numpy()
+                    val_loss_total += ops.convert_to_numpy(loss)
                     num_valid_impressions_for_loss += 1
             except Exception as e:
                 progress.console.print(f"[WARNING fast_evaluate] Error calculating loss: {e}.")

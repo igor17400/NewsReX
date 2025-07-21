@@ -2,10 +2,11 @@ import os
 
 import hydra
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+# Set JAX as Keras backend before importing keras
+os.environ["KERAS_BACKEND"] = "jax"
 
-import tensorflow as tf
-import numpy as np
+import keras
+
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import (
     BarColumn,
@@ -26,14 +27,14 @@ from utils.logging import setup_wandb_session
 from utils.device import setup_device
 
 
-def setup_tensorflow_precision(use_mixed_precision: bool):
-    """Sets the global TensorFlow precision policy."""
+def setup_precision(use_mixed_precision: bool):
+    """Sets the global Keras precision policy."""
     if use_mixed_precision:
-        console.log("Setting TensorFlow mixed precision policy to 'mixed_float16'.")
-        policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(policy)
+        console.log("Setting Keras mixed precision policy to 'mixed_float16'.")
+        policy = keras.mixed_precision.Policy('mixed_float16')
+        keras.mixed_precision.set_global_policy(policy)
     else:
-        console.log("Using TensorFlow default precision policy 'float32'.")
+        console.log("Using Keras default precision policy 'float32'.")
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -56,11 +57,10 @@ def main_training_entry(cfg: DictConfig) -> None:
     use_mixed = cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else False
     
     # Set global TensorFlow precision policy
-    setup_tensorflow_precision(use_mixed)
+    setup_precision(use_mixed)
 
-    # Set random seeds
-    tf.random.set_seed(cfg.seed)
-    np.random.seed(cfg.seed)
+    # Set random seeds for all backends (Keras 3 handles backend-specific seeding)
+    keras.utils.set_random_seed(cfg.seed)
 
     # Initialize WandB
     setup_wandb_session(cfg)

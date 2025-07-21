@@ -1,7 +1,9 @@
 from typing import Tuple, Dict, Any
 
-import tensorflow as tf
-from tensorflow.keras import layers
+# Set JAX backend for Keras 3
+
+import keras
+from keras import layers, ops
 
 from .layers import AdditiveAttentionLayer
 from .base import BaseModel
@@ -11,20 +13,20 @@ class NRMS(BaseModel):
     """Neural News Recommendation with Multi-Head Self-Attention (NRMS) model."""
 
     def __init__(
-        self,
-        processed_news: Dict[str, Any],
-        embedding_size: int = 300,
-        multiheads: int = 16,
-        head_dim: int = 16,
-        attention_hidden_dim: int = 200,
-        dropout_rate: float = 0.2,
-        seed: int = 42,
-        max_title_length: int = 50,
-        max_history_length: int = 50,
-        max_impressions_length: int = 5,
-        process_user_id: bool = False,  # Only used in base model
-        name: str = "nrms",
-        **kwargs,
+            self,
+            processed_news: Dict[str, Any],
+            embedding_size: int = 300,
+            multiheads: int = 16,
+            head_dim: int = 16,
+            attention_hidden_dim: int = 200,
+            dropout_rate: float = 0.2,
+            seed: int = 42,
+            max_title_length: int = 50,
+            max_history_length: int = 50,
+            max_impressions_length: int = 5,
+            process_user_id: bool = False,  # Only used in base model
+            name: str = "nrms",
+            **kwargs,
     ):
         super().__init__(name=name, **kwargs)
 
@@ -39,10 +41,6 @@ class NRMS(BaseModel):
         self.max_history_length = max_history_length
         self.max_impressions_length = max_impressions_length
 
-        tf.random.set_seed(
-            self.seed
-        )  # Set global TF seed for reproducibility if needed elsewhere too
-
         self.vocab_size = processed_news["vocab_size"]
         self.embeddings_matrix = processed_news["embeddings"]
 
@@ -50,7 +48,7 @@ class NRMS(BaseModel):
         self.embedding_layer = layers.Embedding(
             input_dim=self.vocab_size,
             output_dim=self.embedding_size,
-            embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
+            embeddings_initializer=keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
             mask_zero=False,
             name="word_embedding",
@@ -62,7 +60,7 @@ class NRMS(BaseModel):
         # Build the main training model and the scorer model
         self.training_model, self.scorer_model = self._build_graph_models()
 
-    def _build_newsencoder(self) -> tf.keras.Model:
+    def _build_newsencoder(self) -> keras.Model:
         """Build the news encoder component.
 
         The news encoder processes news titles through:
@@ -72,11 +70,11 @@ class NRMS(BaseModel):
         4. Additive attention to get a single news vector
 
         Returns:
-            tf.keras.Model: The news encoder model
+            keras.Model: The news encoder model
                 Input: (batch_size, title_length) - tokenized news titles
                 Output: (batch_size, embedding_dim) - news embeddings
         """
-        sequences_input_title = tf.keras.Input(
+        sequences_input_title = keras.Input(
             shape=(self.max_title_length,), dtype="int32", name="news_tokens_input"
         )
 
@@ -91,7 +89,7 @@ class NRMS(BaseModel):
             num_heads=self.multiheads,
             key_dim=self.head_dim,
             dropout=self.dropout_rate,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed),
             name="title_word_self_attention",
         )(y, y, y)
 
@@ -105,9 +103,9 @@ class NRMS(BaseModel):
             name="title_additive_attention",
         )(y)
 
-        return tf.keras.Model(sequences_input_title, pred_title, name="news_encoder")
+        return keras.Model(sequences_input_title, pred_title, name="news_encoder")
 
-    def _build_userencoder(self) -> tf.keras.Model:
+    def _build_userencoder(self) -> keras.Model:
         """Build the user encoder component.
 
         The user encoder processes user history through:
@@ -116,12 +114,12 @@ class NRMS(BaseModel):
         3. Additive attention to get a single user vector
 
         Returns:
-            tf.keras.Model: The user encoder model
+            keras.Model: The user encoder model
                 Input: (batch_size, history_length, title_length) - tokenized news history
                 Output: (batch_size, embedding_dim) - user embeddings
         """
         # Input shape: (batch_size, num_history_news, num_words_in_title)
-        his_input_title_tokens = tf.keras.Input(
+        his_input_title_tokens = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_news_tokens_input",
@@ -137,7 +135,7 @@ class NRMS(BaseModel):
             num_heads=self.multiheads,
             key_dim=self.head_dim,
             dropout=self.dropout_rate,
-            kernel_initializer=tf.keras.initializers.GlorotUniform(seed=self.seed),
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed),
             name="browsed_news_self_attention",
         )(click_title_presents, click_title_presents, click_title_presents)
 
@@ -148,9 +146,9 @@ class NRMS(BaseModel):
             name="user_additive_attention",
         )(y)
 
-        return tf.keras.Model(his_input_title_tokens, user_present, name="user_encoder")
+        return keras.Model(his_input_title_tokens, user_present, name="user_encoder")
 
-    def _build_graph_models(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
+    def _build_graph_models(self) -> Tuple[keras.Model, keras.Model]:
         """Build the training and scoring models.
 
         This method builds two models:
@@ -168,12 +166,12 @@ class NRMS(BaseModel):
                 - Scorer model
         """
         # --- Inputs for Training Model ---
-        history_tokens_input_train = tf.keras.Input(
+        history_tokens_input_train = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_tokens_train",
         )
-        candidate_tokens_input_train = tf.keras.Input(
+        candidate_tokens_input_train = keras.Input(
             shape=(self.max_impressions_length, self.max_title_length),
             dtype="int32",
             name="candidate_tokens_train",
@@ -196,19 +194,19 @@ class NRMS(BaseModel):
         # Apply softmax for training
         preds_train = layers.Activation("softmax", name="softmax_activation_train")(scores)
 
-        training_model = tf.keras.Model(
+        training_model = keras.Model(
             inputs=[history_tokens_input_train, candidate_tokens_input_train],
             outputs=preds_train,
             name="nrms_training_model",
         )
 
         # ------ Inputs for Scorer Model ------
-        history_tokens_input_score = tf.keras.Input(
+        history_tokens_input_score = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_tokens_score",
         )
-        single_candidate_tokens_input_score = tf.keras.Input(
+        single_candidate_tokens_input_score = keras.Input(
             shape=(self.max_title_length,),
             dtype="int32",
             name="single_candidate_tokens_score",
@@ -228,7 +226,7 @@ class NRMS(BaseModel):
         # Apply sigmoid for single prediction probability
         pred_score = layers.Activation("sigmoid", name="sigmoid_activation_score")(pred_score)
 
-        scorer_model = tf.keras.Model(
+        scorer_model = keras.Model(
             inputs=[history_tokens_input_score, single_candidate_tokens_input_score],
             outputs=pred_score,
             name="nrms_scorer_model",
@@ -263,7 +261,7 @@ class NRMS(BaseModel):
             training (bool, optional): Whether the model is in training mode. Defaults to None.
 
         Returns:
-            tf.Tensor: Model predictions
+            Tensor: Model predictions
                 - For training: shape (batch_size, num_candidates) with softmax probabilities
                 - For single candidate: shape (batch_size, 1) with sigmoid probabilities
                 - For multiple candidates: shape (batch_size, num_candidates) with raw scores
@@ -291,7 +289,7 @@ class NRMS(BaseModel):
                 - 'cand_tokens': Candidate news tokens, shape (batch_size, num_candidates, title_len)
 
         Returns:
-            tf.Tensor: Softmax probabilities for each candidate
+            Tensor: Softmax probabilities for each candidate
                 Shape: (batch_size, num_candidates)
         """
         # Convert dict inputs to list format expected by training model
@@ -311,7 +309,7 @@ class NRMS(BaseModel):
                 - 'history_tokens' and 'candidate_tokens' for multiple candidate scoring
 
         Returns:
-            tf.Tensor: Model predictions
+            Tensor: Model predictions
                 - For single candidate: shape (batch_size, 1) with sigmoid probabilities
                 - For multiple candidates: shape (batch_size, num_candidates) with raw scores
 
@@ -333,56 +331,60 @@ class NRMS(BaseModel):
         )
 
     def _score_multiple_candidates(self, inputs):
-        """Score multiple candidates for each history in the batch.
+        """Optimized multiple candidate scoring using JAX backend."""
+        history_batch = inputs["hist_tokens"]
+        candidates_batch = inputs["cand_tokens"]
 
-        This method processes a batch of user histories and their corresponding candidate news articles.
-        For each user history, it scores all candidates against that history using the scorer_model.
-        The scoring is done one candidate at a time to maintain batch consistency.
+        # Debug: print shapes
+        print(f"DEBUG: history_batch.shape = {ops.shape(history_batch)}")
+        print(f"DEBUG: candidates_batch.shape = {ops.shape(candidates_batch)}")
 
-        Args:
-            inputs (dict): Dictionary containing:
-                - 'hist_tokens': User history tokens, shape (batch_size, history_len, title_len)
-                - 'cand_tokens': Candidate news tokens, shape (batch_size, num_candidates, title_len)
+        # Get user representations for entire batch
+        user_representations = self.userencoder(history_batch, training=False)
+        
+        # Debug: print user representations shape
+        print(f"DEBUG: user_representations.shape = {ops.shape(user_representations)}")
 
-        Returns:
-            tf.Tensor: Scores for all candidates
-                Shape: (batch_size, num_candidates)
-                Each row contains the scores for all candidates for one user history
+        # Process all candidates efficiently
+        batch_size = ops.shape(candidates_batch)[0]
+        num_candidates = ops.shape(candidates_batch)[1]
 
-        Note:
-            This method processes candidates one at a time to ensure proper batch handling
-            and to maintain consistency with the scorer_model's expectations.
-        """
-        history_batch = inputs["hist_tokens"]  # Shape: (batch_size, history_len, title_len)
-        candidates_batch = inputs["cand_tokens"]  # Shape: (batch_size, num_candidates, title_len)
+        # Reshape candidates for batch processing
+        candidates_flat = ops.reshape(candidates_batch,
+                                      (batch_size * num_candidates, self.max_title_length))
 
-        batch_size = tf.shape(history_batch)[0]
-        num_candidates = tf.shape(candidates_batch)[1]
+        # Get candidate representations
+        candidate_representations_flat = self.newsencoder(candidates_flat, training=False)
 
-        all_scores = []
+        # Reshape back to batch format
+        candidate_representations = ops.reshape(candidate_representations_flat,
+                                                (batch_size, num_candidates, self.embedding_size))
 
-        # Process each item in the batch
-        for i in range(batch_size):
-            # Get history for current item
-            current_history = tf.expand_dims(
-                history_batch[i], 0
-            )  # Shape: (1, history_len, title_len)
+        # Debug: print candidate representations shape
+        print(f"DEBUG: candidate_representations.shape = {ops.shape(candidate_representations)}")
+        print(f"DEBUG: candidate_representations_flat.shape = {ops.shape(candidate_representations_flat)}")
+        print(f"DEBUG: batch_size = {batch_size}, num_candidates = {num_candidates}, embedding_size = {self.embedding_size}")
 
-            # Score each candidate against this history
-            candidate_scores = []
-            for j in range(num_candidates):
-                current_candidate = tf.expand_dims(
-                    candidates_batch[i, j], 0
-                )  # Shape: (1, title_len)
-                score = self.scorer_model([current_history, current_candidate], training=False)
-                candidate_scores.append(score)
+        # Debug: print exact shapes before einsum
+        print(f"DEBUG: About to do einsum with:")
+        print(f"  candidate_representations.shape = {ops.shape(candidate_representations)}")
+        print(f"  user_representations.shape = {ops.shape(user_representations)}")
+        print(f"  Expected: candidate_representations (64, 5, 300), user_representations (64, 300)")
 
-            # Combine scores for all candidates of this item
-            item_scores = tf.concat(candidate_scores, axis=1)  # Shape: (1, num_candidates)
-            all_scores.append(item_scores)
+        # Compute scores using explicit matrix operations instead of einsum
+        # Expand user_representations to match candidate dimensions for element-wise multiplication
+        # user_representations: (batch_size, embedding_size) -> (batch_size, 1, embedding_size)
+        user_expanded = ops.expand_dims(user_representations, axis=1)  # (64, 1, 300)
+        
+        # Element-wise multiplication: (64, 5, 300) * (64, 1, 300) -> (64, 5, 300)
+        similarity = candidate_representations * user_expanded
+        
+        # Sum over the feature dimension to get scores: (64, 5, 300) -> (64, 5)
+        scores = ops.sum(similarity, axis=-1)
+        
+        print(f"DEBUG: scores.shape = {ops.shape(scores)}")
 
-        # Combine scores for all items in batch
-        return tf.concat(all_scores, axis=0)  # Shape: (batch_size, num_candidates)
+        return scores
 
     def get_config(self):
         """Returns the configuration of the NRMS model for serialization.
@@ -403,7 +405,6 @@ class NRMS(BaseModel):
                 "dropout_rate": self.dropout_rate,
                 "seed": self.seed,
                 "vocab_size": self.vocab_size,
-                # "embeddings_matrix": self.embeddings_matrix.tolist() # Careful with large matrices in config
             }
         )
         # Note: processed_news is not part of the config as it's data.

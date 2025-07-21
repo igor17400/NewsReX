@@ -9,20 +9,20 @@ import json
 import re
 from pathlib import Path
 
+import keras
+
 import numpy as np
 import pandas as pd
 from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
-import tensorflow as tf
-from tensorflow import keras
 
-from datasets.base import BaseNewsDataset
-from utils.cache_manager import CacheManager
-from utils.embeddings import EmbeddingsManager
-from utils.logging import setup_logging
-from utils.sampling import ImpressionSampler
-from datasets.utils import (
+from src.datasets.base import BaseNewsDataset
+from src.utils.cache_manager import CacheManager
+from src.utils.embeddings import EmbeddingsManager
+from src.utils.logging import setup_logging
+from src.utils.sampling import ImpressionSampler
+from src.datasets.utils import (
     display_statistics,
     apply_data_fraction,
     string_is_number,
@@ -35,13 +35,13 @@ from datasets.utils import (
     log_key_statistics,
     save_unique_users_to_csv,
 )
-from datasets.dataloader import (
+from src.datasets.dataloader import (
     NewsDataLoader,
     UserHistoryBatchDataloader,
     NewsBatchDataloader,
     ImpressionIterator,
 )
-from datasets.knowledge_graph import KnowledgeGraphProcessor
+from src.datasets.knowledge_graph import KnowledgeGraphProcessor
 
 # Setup logging
 setup_logging()
@@ -108,7 +108,13 @@ class MINDDataset(BaseNewsDataset):
         self.process_subcategory = process_subcategory
         self.process_user_id = process_user_id
         policy = keras.mixed_precision.global_policy()
-        self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
+        # Convert string dtype to appropriate dtype string for Keras 3
+        if policy.compute_dtype == "mixed_float16":
+            self.float_dtype = "float16"
+        elif policy.compute_dtype == "float16":
+            self.float_dtype = "float16"
+        else:
+            self.float_dtype = "float32"
 
         # Store validation split parameters
         self.validation_split_strategy = validation_split_strategy
@@ -130,12 +136,12 @@ class MINDDataset(BaseNewsDataset):
         # Create directories if they don't exist
         self.dataset_path.mkdir(parents=True, exist_ok=True)
 
-        # Datasets - TensorFlow tensors
-        self.train_val_news_data: Dict[str, tf.Tensor] = {}
-        self.train_behaviors_data: Dict[str, tf.Tensor] = {}
-        self.val_behaviors_data: Dict[str, tf.Tensor] = {}
-        self.test_news_data: Dict[str, tf.Tensor] = {}
-        self.test_behaviors_data: Dict[str, tf.Tensor] = {}
+        # Datasets - Keras tensors
+        self.train_val_news_data: Dict[str, keras.KerasTensor] = {}
+        self.train_behaviors_data: Dict[str, keras.KerasTensor] = {}
+        self.val_behaviors_data: Dict[str, keras.KerasTensor] = {}
+        self.test_news_data: Dict[str, keras.KerasTensor] = {}
+        self.test_behaviors_data: Dict[str, keras.KerasTensor] = {}
 
         # Set random seed
         np.random.seed(seed)
@@ -442,79 +448,67 @@ class MINDDataset(BaseNewsDataset):
                 )
 
             logger.info("Calculating GloVe mean and std...")
-            # Perform calculations on the large raw GloVe tensor on the CPU
-            # to prevent potential GPU memory issues.
-            with tf.device("/cpu:0"):
-                glove_mean_np = tf.reduce_mean(glove_tensor_tf, axis=0).numpy()
-                glove_std_np = tf.math.reduce_std(glove_tensor_tf, axis=0).numpy()
+            # Convert to numpy for calculations to prevent potential GPU memory issues
+            glove_array = keras.ops.convert_to_numpy(glove_tensor_tf)
+            glove_mean_np = np.mean(glove_array, axis=0)
+            glove_std_np = np.std(glove_array, axis=0)
             logger.info("GloVe mean and std calculated successfully.")
 
             logger.info("Creating inital embedding matrix...")
             embedding_matrix = np.zeros(
-                (len(self.vocab), self.embedding_size), dtype=self.float_dtype.as_numpy_dtype
+                (len(self.vocab), self.embedding_size), dtype=np.float32
             )
 
             # Initialize PAD vector
             embedding_matrix[self.vocab["[PAD]"]] = np.zeros(
-                self.embedding_size, dtype=self.float_dtype.as_numpy_dtype
+                self.embedding_size, dtype=np.float32
             )
 
             # Initialize UNK vector
             embedding_matrix[self.vocab["[UNK]"]] = np.random.normal(
                 loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
-            ).astype(self.float_dtype.as_numpy_dtype)
+            ).astype(np.float32)
 
-            logger.info(
-                "Making sure <NUM> vector is in the embedding matrix and tf.gather runs on CPU..."
-            )
-            # Force tf.gather operations using the CPU-bound glove_tensor_tf to also run on CPU.
-            # This avoids copying the large glove_tensor_tf to GPU for these lookup operations.
-            with tf.device("/cpu:0"):
-                # Initialize <NUM> vector if it's in our vocab
-                if "<NUM>" in self.vocab:
-                    num_token_id = self.vocab["<NUM>"]
-                    glove_num_idx = glove_vocab_map.get("<NUM>")
-                    if glove_num_idx is not None:
-                        embedding_matrix[num_token_id] = tf.gather(
-                            glove_tensor_tf, glove_num_idx
-                        ).numpy()
-                    else:
-                        glove_number_idx = glove_vocab_map.get("number")
-                        if glove_number_idx is not None:
-                            embedding_matrix[num_token_id] = tf.gather(
-                                glove_tensor_tf, glove_number_idx
-                            ).numpy()
-                        else:  # Fallback to random
-                            embedding_matrix[num_token_id] = np.random.normal(
-                                loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
-                            ).astype(self.float_dtype.as_numpy_dtype)
-                logger.info("Initial embedding matrix created successfully.")
+            logger.info("Setting up <NUM> vector in the embedding matrix...")
+            # Initialize <NUM> vector if it's in our vocab
+            if "<NUM>" in self.vocab:
+                num_token_id = self.vocab["<NUM>"]
+                glove_num_idx = glove_vocab_map.get("<NUM>")
+                if glove_num_idx is not None:
+                    embedding_matrix[num_token_id] = glove_array[glove_num_idx]
+                else:
+                    glove_number_idx = glove_vocab_map.get("number")
+                    if glove_number_idx is not None:
+                        embedding_matrix[num_token_id] = glove_array[glove_number_idx]
+                    else:  # Fallback to random
+                        embedding_matrix[num_token_id] = np.random.normal(
+                            loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
+                        ).astype(np.float32)
+            logger.info("Initial embedding matrix created successfully.")
 
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                    TimeRemainingColumn(),
-                    console=console,
-                ) as progress:
-                    task = progress.add_task(
-                        "Populating inital embedding matrix...", total=len(self.vocab)
-                    )
-                    for word, idx in self.vocab.items():
-                        if word in ["[PAD]", "[UNK]", "<NUM>"]:  # Already handled
-                            progress.advance(task)
-                            continue
-                        glove_word_idx = glove_vocab_map.get(word)
-                        if glove_word_idx is not None:
-                            embedding_matrix[idx] = tf.gather(
-                                glove_tensor_tf, glove_word_idx
-                            ).numpy()
-                        else:  # Word not in GloVe, initialize randomly
-                            embedding_matrix[idx] = np.random.normal(
-                                loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
-                            ).astype(self.float_dtype.as_numpy_dtype)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                task = progress.add_task(
+                    "Populating inital embedding matrix...", total=len(self.vocab)
+                )
+                for word, idx in self.vocab.items():
+                    if word in ["[PAD]", "[UNK]", "<NUM>"]:  # Already handled
                         progress.advance(task)
+                        continue
+                    glove_word_idx = glove_vocab_map.get(word)
+                    if glove_word_idx is not None:
+                        embedding_matrix[idx] = glove_array[glove_word_idx]
+                    else:  # Word not in GloVe, initialize randomly
+                        embedding_matrix[idx] = np.random.normal(
+                            loc=glove_mean_np, scale=glove_std_np, size=self.embedding_size
+                        ).astype(np.float32)
+                    progress.advance(task)
 
             np.save(embeddings_file, embedding_matrix)
             logger.info(f"Embedding matrix created successfully and saved to {embeddings_file}")
@@ -551,8 +545,8 @@ class MINDDataset(BaseNewsDataset):
 
         logger.info(f"Loading filtered embeddings (threshold {self.word_threshold})...")
         embedding_matrix_loaded = np.load(embeddings_file)
-        processed_news_content["embeddings"] = tf.constant(
-            embedding_matrix_loaded, dtype=self.float_dtype
+        processed_news_content["embeddings"] = keras.ops.cast(
+            keras.ops.convert_to_tensor(embedding_matrix_loaded), self.float_dtype
         )
 
         # This map is used by process_behaviors. It maps original news ID string to tokenized title array
@@ -1057,7 +1051,7 @@ class MINDDataset(BaseNewsDataset):
                     "candidate_news_subcategories": np.array(
                         candidate_news_subcategories, dtype=np.int32
                     ),
-                    "labels": np.array(labels, dtype=self.float_dtype.as_numpy_dtype),
+                    "labels": np.array(labels, dtype=np.float32 if self.float_dtype in ["float32", "mixed_float16"] else np.float16),
                     "impression_ids": np.array(impression_ids, dtype=np.int32),
                     "user_ids": np.array(user_ids, dtype=np.int32),
                 }
@@ -1229,7 +1223,7 @@ class MINDDataset(BaseNewsDataset):
             stage="test",
         )
 
-    def train_dataloader(self, batch_size: int) -> tf.data.Dataset:
+    def train_dataloader(self, batch_size: int) -> Any:
         """Create training dataset with token-based inputs."""
         return NewsDataLoader.create_train_dataset(
             history_news_tokens=self.train_behaviors_data["history_news_tokens"],
@@ -1329,11 +1323,11 @@ class MINDDataset(BaseNewsDataset):
         news_subcategory_indices = self.processed_news.get("subcategory_indices", np.array([]))
 
         return NewsBatchDataloader(
-            news_ids=tf.constant(news_ids),
-            news_tokens=tf.constant(news_tokens),
-            news_abstract_tokens=tf.constant(news_abstract_tokens),
-            news_category_indices=tf.constant(news_category_indices),
-            news_subcategory_indices=tf.constant(news_subcategory_indices),
+            news_ids=news_ids,  # Keep as numpy array since JAX doesn't support strings
+            news_tokens=keras.ops.convert_to_tensor(news_tokens),
+            news_abstract_tokens=keras.ops.convert_to_tensor(news_abstract_tokens),
+            news_category_indices=keras.ops.convert_to_tensor(news_category_indices),
+            news_subcategory_indices=keras.ops.convert_to_tensor(news_subcategory_indices),
             batch_size=512,
             process_title=self.process_title,
             process_abstract=self.process_abstract,

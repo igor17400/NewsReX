@@ -1,9 +1,9 @@
 from typing import Any, Optional
 
-import tensorflow as tf
+import keras
 
 
-class NewsRecommenderLoss(tf.keras.losses.Loss):
+class NewsRecommenderLoss(keras.losses.Loss):
     """Base class for news recommendation losses."""
 
     def __init__(
@@ -45,7 +45,7 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
         self.from_logits = from_logits
         self.label_smoothing = label_smoothing
 
-    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    def call(self, y_true: keras.KerasTensor, y_pred: keras.KerasTensor) -> keras.KerasTensor:
         """Compute the loss.
 
         Args:
@@ -55,7 +55,7 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
         Returns:
             Loss value
         """
-        return tf.keras.losses.categorical_crossentropy(
+        return keras.losses.categorical_crossentropy(
             y_true, y_pred, from_logits=self.from_logits, label_smoothing=self.label_smoothing
         )
 
@@ -90,7 +90,7 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
         self.from_logits = from_logits
         self.label_smoothing = label_smoothing
 
-    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    def call(self, y_true: keras.KerasTensor, y_pred: keras.KerasTensor) -> keras.KerasTensor:
         """Compute the loss.
 
         Args:
@@ -100,7 +100,7 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
         Returns:
             Loss value
         """
-        return tf.keras.losses.binary_crossentropy(
+        return keras.losses.binary_crossentropy(
             y_true, y_pred, from_logits=self.from_logits, label_smoothing=self.label_smoothing
         )
 
