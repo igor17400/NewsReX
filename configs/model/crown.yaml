@@ -1,0 +1,26 @@
+_target_: src.models.crown.CROWN
+
+# Inherit from base configuration
+defaults:
+- base
+
+# Model-specific parameters
+embedding_size: 300
+attention_dim: 200
+intent_embedding_dim: 200
+intent_num: 4 # k for k-intent disentanglement
+category_embedding_dim: 100
+subcategory_embedding_dim: 100
+word_embedding_dim: 300
+head_num: 8
+feedforward_dim: 512
+num_layers: 2
+isab_num_heads: 4
+isab_num_inds: 4
+alpha: 0.1 # Weight for auxiliary loss
+dropout_rate: 0.2
+
+# Loss configuration
+loss:
+  name: "categorical_crossentropy"
+  from_logits: false

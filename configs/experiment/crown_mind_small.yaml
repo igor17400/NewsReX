@@ -1,0 +1,63 @@
+# CROWN experiment configuration for MIND-small dataset
+defaults:
+- model: crown
+- dataset: mind_small
+- sampling: base
+- optimizer: adam
+- scheduler: base
+- callbacks: base
+- logging: wandb
+- _self_
+
+# Experiment-specific overrides
+experiment_name: "crown_mind_small"
+seed: 42
+
+# Training parameters
+training:
+  batch_size: 64
+  epochs: 50
+  validation_frequency: 1
+  early_stopping_patience: 10
+  model_checkpoint_monitor: "val_auc"
+  model_checkpoint_save_best_only: true
+
+# Model parameters (can override model config)
+model:
+  max_title_length: 30
+  max_abstract_length: 100
+  max_history_length: 50
+  max_impressions_length: 5
+  attention_dim: 200
+  intent_embedding_dim: 200
+  intent_num: 4
+  word_embedding_dim: 300
+  head_num: 8
+  feedforward_dim: 512
+  num_layers: 2
+  alpha: 0.1
+  dropout_rate: 0.2
+
+# Dataset parameters
+dataset:
+  process_title: true
+  process_abstract: true
+  process_category: true
+  process_subcategory: true
+
+# Sampling parameters
+sampling:
+  max_impressions_length: 5
+  strategy: "random"
+  negative_ratio: 4
+
+# Optimizer parameters
+optimizer:
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+# Logging parameters
+logging:
+  project_name: "btc-crown"
+  experiment_name: "crown_mind_small"
+  log_model: true
