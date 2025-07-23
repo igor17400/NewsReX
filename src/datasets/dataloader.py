@@ -134,30 +134,37 @@ class NewsDataLoader:
         if process_user_id:
             features["user_ids"] = user_ids
 
-        # For Keras 3 backend-agnostic approach, create a simple generator
-        def data_generator():
-            # Convert to numpy arrays for slicing
-            feature_arrays = {key: keras.ops.convert_to_numpy(value) for key, value in features.items()}
-            label_array = keras.ops.convert_to_numpy(labels)
-            num_samples = len(label_array)
-            
-            # Create indices and shuffle
-            indices = np.arange(num_samples)
-            np.random.shuffle(indices)
-            
-            for i in range(0, num_samples, batch_size):
-                end_idx = min(i + batch_size, num_samples)
-                batch_indices = indices[i:end_idx]
-                
-                batch_features = {
-                    key: keras.ops.convert_to_tensor(value[batch_indices])
-                    for key, value in feature_arrays.items()
-                }
-                batch_labels = keras.ops.convert_to_tensor(label_array[batch_indices])
-                
-                yield batch_features, batch_labels
+        # For Keras 3 backend-agnostic approach, create a reusable generator
+        # Convert to numpy arrays for reuse across epochs
+        feature_arrays = {key: keras.ops.convert_to_numpy(value) for key, value in features.items()}
+        label_array = keras.ops.convert_to_numpy(labels)
+        num_samples = len(label_array)
         
-        return data_generator()
+        class DataGenerator:
+            def __init__(self, feature_arrays, label_array, batch_size, num_samples):
+                self.feature_arrays = feature_arrays
+                self.label_array = label_array
+                self.batch_size = batch_size
+                self.num_samples = num_samples
+            
+            def __iter__(self):
+                # Create indices and shuffle for each epoch
+                indices = np.arange(self.num_samples)
+                np.random.shuffle(indices)
+                
+                for i in range(0, self.num_samples, self.batch_size):
+                    end_idx = min(i + self.batch_size, self.num_samples)
+                    batch_indices = indices[i:end_idx]
+                    
+                    batch_features = {
+                        key: keras.ops.convert_to_tensor(value[batch_indices])
+                        for key, value in self.feature_arrays.items()
+                    }
+                    batch_labels = keras.ops.convert_to_tensor(self.label_array[batch_indices])
+                    
+                    yield batch_features, batch_labels
+        
+        return DataGenerator(feature_arrays, label_array, batch_size, num_samples)
 
 
 class NewsBatchDataloader:
