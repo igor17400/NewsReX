@@ -117,7 +117,7 @@ BTC is a modular and extensible framework for news recommendation systems resear
     Test if JAX is properly using your GPU:
 
     ```bash
-    python test_jax_gpu.py
+    python ./src/tests/test_jax_gpu.py
     ```
 
     *Expected output (example for GPU detected):*

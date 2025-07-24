@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Test script for NRMS model implementation."""
 
+import os
 import sys
 from pathlib import Path
+
+# Set JAX as Keras backend before importing keras
+os.environ["KERAS_BACKEND"] = "jax"
 
 # Add the project root and src to Python path to enable imports
 project_root = Path(__file__).parent.parent.parent
@@ -11,6 +15,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(src_path))
 
 import numpy as np
+import keras
 from src.models.nrms import NRMS
 
 def test_nrms_model():
@@ -99,8 +104,10 @@ def test_nrms_model():
 if __name__ == "__main__":
     # Set random seeds for reproducibility
     np.random.seed(42)
+    keras.utils.set_random_seed(42)
 
     print("Testing NRMS Model Implementation")
+    print(f"Backend: {keras.backend.backend()}")
     print("="*40)
     
     success = test_nrms_model()
