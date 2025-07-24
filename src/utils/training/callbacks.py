@@ -269,3 +269,65 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
     def set_model_save_path(self, best_model_path: Path):
         """Set the path where the best model should be saved."""
         self.best_model_path = best_model_path
+
+
+class RichProgressCallback(keras.callbacks.Callback):
+    """Keras callback to integrate with Rich progress bars."""
+
+    def __init__(self, progress_manager: Progress, num_epochs: int):
+        super().__init__()
+        self.progress_manager = progress_manager
+        self.num_epochs = num_epochs
+        self.overall_task = None
+        self.epoch_task = None
+
+    def on_train_begin(self, logs=None):
+        """Initialize overall progress tracking."""
+        self.overall_task = self.progress_manager.add_task(
+            "Overall Training Progress",
+            total=self.num_epochs
+        )
+
+    def on_epoch_begin(self, epoch, logs=None):
+        """Initialize epoch progress tracking."""
+        if hasattr(self.model, 'train_dataset') and hasattr(self.model.train_dataset, '__len__'):
+            try:
+                total_steps = len(self.model.train_dataset)
+            except:
+                total_steps = None
+        else:
+            total_steps = None
+
+        self.epoch_task = self.progress_manager.add_task(
+            f"Epoch {epoch + 1}/{self.num_epochs}",
+            total=total_steps,
+            visible=True
+        )
+
+    def on_batch_end(self, batch, logs=None):
+        """Update epoch progress after each batch."""
+        if self.epoch_task is not None:
+            loss = logs.get('loss', 0.0) if logs else 0.0
+            self.progress_manager.update(
+                self.epoch_task,
+                advance=1,
+                description=f"Epoch {self.model._epoch + 1}/{self.num_epochs} (Loss: {loss:.4f})"
+            )
+
+    def on_epoch_end(self, epoch, logs=None):
+        """Clean up epoch progress and update overall progress."""
+        if self.epoch_task is not None:
+            self.progress_manager.remove_task(self.epoch_task)
+            self.epoch_task = None
+
+        if self.overall_task is not None:
+            self.progress_manager.update(
+                self.overall_task,
+                advance=1,
+                description=f"Completed Epoch {epoch + 1}/{self.num_epochs}"
+            )
+
+    def on_train_end(self, logs=None):
+        """Clean up overall progress tracking."""
+        if self.overall_task is not None:
+            self.progress_manager.remove_task(self.overall_task)

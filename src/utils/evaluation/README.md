@@ -35,7 +35,7 @@ Core evaluation functions for running validation and testing.
 
 ```python
 # Run evaluation epoch
-from src.utils.evaluation.evaluation import run_evaluation_epoch
+from src.utils.evaluation.main import run_evaluation_epoch
 
 metrics = run_evaluation_epoch(
     model=model,
@@ -47,7 +47,7 @@ metrics = run_evaluation_epoch(
 )
 
 # Run initial validation
-from src.utils.evaluation.evaluation import _run_initial_validation
+from src.utils.evaluation.main import _run_initial_validation
 
 initial_metrics = _run_initial_validation(
     model, dataset_provider, metrics_engine, progress_bar, cfg

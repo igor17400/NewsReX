@@ -7,9 +7,9 @@ from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import Progress
 
+from .callbacks import FastEvaluationCallback, SlowEvaluationCallback, RichProgressCallback
 from src.utils.metrics.functions import NewsRecommenderMetrics
-from .callbacks import FastEvaluationCallback, SlowEvaluationCallback
-from ..evaluation.evaluation import (
+from src.utils.evaluation import (
     _run_initial_validation,
     _run_final_testing,
 )
@@ -43,68 +43,6 @@ def _setup_training_directories(output_directory: Path, model_name: str) -> Tupl
     return best_model_path, last_model_path, predictions_save_dir
 
 
-class RichProgressCallback(keras.callbacks.Callback):
-    """Keras callback to integrate with Rich progress bars."""
-
-    def __init__(self, progress_manager: Progress, num_epochs: int):
-        super().__init__()
-        self.progress_manager = progress_manager
-        self.num_epochs = num_epochs
-        self.overall_task = None
-        self.epoch_task = None
-
-    def on_train_begin(self, logs=None):
-        """Initialize overall progress tracking."""
-        self.overall_task = self.progress_manager.add_task(
-            "Overall Training Progress",
-            total=self.num_epochs
-        )
-
-    def on_epoch_begin(self, epoch, logs=None):
-        """Initialize epoch progress tracking."""
-        if hasattr(self.model, 'train_dataset') and hasattr(self.model.train_dataset, '__len__'):
-            try:
-                total_steps = len(self.model.train_dataset)
-            except:
-                total_steps = None
-        else:
-            total_steps = None
-
-        self.epoch_task = self.progress_manager.add_task(
-            f"Epoch {epoch + 1}/{self.num_epochs}",
-            total=total_steps,
-            visible=True
-        )
-
-    def on_batch_end(self, batch, logs=None):
-        """Update epoch progress after each batch."""
-        if self.epoch_task is not None:
-            loss = logs.get('loss', 0.0) if logs else 0.0
-            self.progress_manager.update(
-                self.epoch_task,
-                advance=1,
-                description=f"Epoch {self.model._epoch + 1}/{self.num_epochs} (Loss: {loss:.4f})"
-            )
-
-    def on_epoch_end(self, epoch, logs=None):
-        """Clean up epoch progress and update overall progress."""
-        if self.epoch_task is not None:
-            self.progress_manager.remove_task(self.epoch_task)
-            self.epoch_task = None
-
-        if self.overall_task is not None:
-            self.progress_manager.update(
-                self.overall_task,
-                advance=1,
-                description=f"Completed Epoch {epoch + 1}/{self.num_epochs}"
-            )
-
-    def on_train_end(self, logs=None):
-        """Clean up overall progress tracking."""
-        if self.overall_task is not None:
-            self.progress_manager.remove_task(self.overall_task)
-
-
 def training_loop_orchestrator(
         model: keras.Model,
         dataset_provider: Any,
@@ -136,7 +74,14 @@ def training_loop_orchestrator(
 
     # Prepare training and validation datasets
     console.log("[bold]Preparing datasets for Keras 3 training...[/bold]")
-    train_dataset = dataset_provider.train_dataloader(batch_size=cfg.train.batch_size)
+
+    # Extract model name from config
+    model_name = cfg.model._target_.split('.')[-1].lower()  # e.g., "src.models.nrms.NRMS" -> "nrms"
+
+    train_dataset = dataset_provider.train_dataloader(
+        batch_size=cfg.train.batch_size,
+        model_name=model_name
+    )
 
     # Setup callbacks
     callbacks = []

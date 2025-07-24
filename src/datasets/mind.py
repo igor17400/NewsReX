@@ -51,35 +51,35 @@ console = Console()
 
 class MINDDataset(BaseNewsDataset):
     def __init__(
-        self,
-        name: str,
-        version: str,  # "small", "large", or "200k"
-        urls: Dict,
-        max_title_length: int,
-        max_abstract_length: int,
-        max_history_length: int,
-        max_impressions_length: int,
-        seed: int,
-        embedding_type: str = "glove",
-        embedding_size: int = 300,
-        sampling: Optional[DictConfig] = None,
-        data_fraction_train: float = 1.0,
-        data_fraction_val: float = 1.0,
-        data_fraction_test: float = 1.0,
-        mode: str = "train",
-        use_knowledge_graph: bool = False,
-        random_train_samples: bool = False,
-        validation_split_strategy: str = "chronological",
-        validation_split_percentage: float = 0.05,
-        validation_split_seed: Optional[int] = None,
-        word_threshold: int = 3,
-        process_title: bool = True,
-        process_abstract: bool = True,
-        process_category: bool = True,
-        process_subcategory: bool = True,
-        process_user_id: bool = False,
-        max_entities: int = 1000,
-        max_relations: int = 500,
+            self,
+            name: str,
+            version: str,  # "small", "large", or "200k"
+            urls: Dict,
+            max_title_length: int,
+            max_abstract_length: int,
+            max_history_length: int,
+            max_impressions_length: int,
+            seed: int,
+            embedding_type: str = "glove",
+            embedding_size: int = 300,
+            sampling: Optional[DictConfig] = None,
+            data_fraction_train: float = 1.0,
+            data_fraction_val: float = 1.0,
+            data_fraction_test: float = 1.0,
+            mode: str = "train",
+            use_knowledge_graph: bool = False,
+            random_train_samples: bool = False,
+            validation_split_strategy: str = "chronological",
+            validation_split_percentage: float = 0.05,
+            validation_split_seed: Optional[int] = None,
+            word_threshold: int = 3,
+            process_title: bool = True,
+            process_abstract: bool = True,
+            process_category: bool = True,
+            process_subcategory: bool = True,
+            process_user_id: bool = False,
+            max_entities: int = 1000,
+            max_relations: int = 500,
     ):
         super().__init__()
         self.name = name
@@ -230,7 +230,7 @@ class MINDDataset(BaseNewsDataset):
             news_dfs = []
             train_news_path = self.dataset_path / "train" / "news.tsv"
             dev_news_path = (
-                self.dataset_path / "valid" / "news.tsv"
+                    self.dataset_path / "valid" / "news.tsv"
             )  # MIND small uses 'valid' for dev
 
             test_news_path = None
@@ -305,7 +305,7 @@ class MINDDataset(BaseNewsDataset):
             subcategory_indices = np.zeros(len(unique_news_ids_str), dtype=np.int32)
 
             for nid_str, cat, subcat in zip(
-                all_news_df["id"], all_news_df["category"], all_news_df["subcategory"]
+                    all_news_df["id"], all_news_df["category"], all_news_df["subcategory"]
             ):
                 int_idx = self.news_str_id_to_int_idx[nid_str]
                 category_indices[int_idx] = self.category_to_idx[cat]
@@ -319,12 +319,12 @@ class MINDDataset(BaseNewsDataset):
                 f"Counting words from {len(train_news_df):,} training news titles for vocabulary construction..."
             )
             with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeRemainingColumn(),
-                console=console,
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TimeRemainingColumn(),
+                    console=console,
             ) as progress:
                 task = progress.add_task(
                     "Counting words in train titles...", total=len(train_news_df)
@@ -367,12 +367,12 @@ class MINDDataset(BaseNewsDataset):
             )
 
             with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeRemainingColumn(),
-                console=console,
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TimeRemainingColumn(),
+                    console=console,
             ) as progress:
                 task = progress.add_task(
                     "Filtering and adding words to vocab...", total=len(sorted_word_counts)
@@ -405,18 +405,18 @@ class MINDDataset(BaseNewsDataset):
             )
 
             with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeRemainingColumn(),
-                console=console,
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TimeRemainingColumn(),
+                    console=console,
             ) as progress:
                 task = progress.add_task(
                     "Tokenizing all news titles and abstracts...", total=len(all_news_df)
                 )
                 for nid_str, title_text, abstract_text in zip(
-                    all_news_df["id"], all_news_df["title"], all_news_df["abstract"]
+                        all_news_df["id"], all_news_df["title"], all_news_df["abstract"]
                 ):
                     int_idx = self.news_str_id_to_int_idx[nid_str]
                     # Tokenize title
@@ -487,12 +487,12 @@ class MINDDataset(BaseNewsDataset):
             logger.info("Initial embedding matrix created successfully.")
 
             with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-                TimeRemainingColumn(),
-                console=console,
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                    TimeRemainingColumn(),
+                    console=console,
             ) as progress:
                 task = progress.add_task(
                     "Populating inital embedding matrix...", total=len(self.vocab)
@@ -568,9 +568,9 @@ class MINDDataset(BaseNewsDataset):
         # ------ Data preprocessing and tensor generation ------
         processed_path = self.dataset_path / "processed"
         files_exist = (
-            (processed_path / "processed_train.pkl").exists()
-            and (processed_path / "processed_val.pkl").exists()
-            and (processed_path / "processed_test.pkl").exists()
+                (processed_path / "processed_train.pkl").exists()
+                and (processed_path / "processed_val.pkl").exists()
+                and (processed_path / "processed_test.pkl").exists()
         )
 
         if not files_exist:
@@ -742,12 +742,12 @@ class MINDDataset(BaseNewsDataset):
             raise ValueError(f"No URLs found in configuration for version: {self.version}")
 
         with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-            console=console,
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=console,
         ) as progress:
             for split, url in self.urls.items():
                 zip_path = self.dataset_path / f"{split}.zip"
@@ -800,7 +800,7 @@ class MINDDataset(BaseNewsDataset):
         )
 
     def _download_and_unzip_file(
-        self, url: str, zip_path: Path, extract_path: Path, description: str
+            self, url: str, zip_path: Path, extract_path: Path, description: str
     ) -> None:
         """Downloads a file from a URL and unzips it."""
         logger.info(f"Downloading {description} data from {url} to {zip_path}...")
@@ -835,7 +835,7 @@ class MINDDataset(BaseNewsDataset):
             logger.info("Found existing knowledge graph data")
 
     def process_behaviors(
-        self, behaviors_df: pd.DataFrame, stage: str
+            self, behaviors_df: pd.DataFrame, stage: str
     ) -> Dict[str, Union[np.ndarray, list]]:
         """Process behaviors storing only tokens, not embeddings."""
         histories_news_ids: List[list] = (
@@ -913,12 +913,12 @@ class MINDDataset(BaseNewsDataset):
         )
 
         with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TimeRemainingColumn(),
-            console=console,
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=console,
         ) as progress:
             task = progress.add_task(f"Processing {stage} behaviors...", total=len(behaviors_df))
 
@@ -936,7 +936,7 @@ class MINDDataset(BaseNewsDataset):
 
                 # -- Process history
                 history = str(row["history"]).split() if pd.notna(row["history"]) else []
-                history = history[-self.max_history_length :]
+                history = history[-self.max_history_length:]
 
                 # -- Store indices/tokens instead of embeddings
                 history_nid_list = [
@@ -955,11 +955,11 @@ class MINDDataset(BaseNewsDataset):
                 history_pad_length = self.max_history_length - len(history)
                 history_nid_list = [0] * history_pad_length + history_nid_list
                 curr_history_tokens = [
-                    [0] * self.max_title_length
-                ] * history_pad_length + curr_history_tokens
+                                          [0] * self.max_title_length
+                                      ] * history_pad_length + curr_history_tokens
                 curr_history_abstract_tokens = [
-                    [0] * self.max_abstract_length
-                ] * history_pad_length + curr_history_abstract_tokens
+                                                   [0] * self.max_abstract_length
+                                               ] * history_pad_length + curr_history_abstract_tokens
                 curr_history_categories = [0] * history_pad_length + curr_history_categories
                 curr_history_subcategories = [0] * history_pad_length + curr_history_subcategories
 
@@ -1051,7 +1051,8 @@ class MINDDataset(BaseNewsDataset):
                     "candidate_news_subcategories": np.array(
                         candidate_news_subcategories, dtype=np.int32
                     ),
-                    "labels": np.array(labels, dtype=np.float32 if self.float_dtype in ["float32", "mixed_float16"] else np.float16),
+                    "labels": np.array(labels, dtype=np.float32 if self.float_dtype in ["float32",
+                                                                                        "mixed_float16"] else np.float16),
                     "impression_ids": np.array(impression_ids, dtype=np.int32),
                     "user_ids": np.array(user_ids, dtype=np.int32),
                 }
@@ -1085,10 +1086,10 @@ class MINDDataset(BaseNewsDataset):
             logger.info(f"Total positive samples: {total_positives:,}")
             logger.info(
                 f"Rows with multiple positives: {rows_with_multiple_positives:,} "
-                f"({rows_with_multiple_positives/total_original_rows*100:.1f}%)"
+                f"({rows_with_multiple_positives / total_original_rows * 100:.1f}%)"
             )
             logger.info(f"Maximum positives in a single row: {max_positives_in_row}")
-            logger.info(f"Average positives per row: {total_positives/total_original_rows:.2f}")
+            logger.info(f"Average positives per row: {total_positives / total_original_rows:.2f}")
             logger.info(f"Total users: {len(set(user_ids))}")
 
             return result
@@ -1134,8 +1135,8 @@ class MINDDataset(BaseNewsDataset):
         return news_df
 
     def get_train_val_data(
-        self,
-        sampled_user_set: Optional[Set[str]] = None,
+            self,
+            sampled_user_set: Optional[Set[str]] = None,
     ) -> Tuple[Dict[str, Union[np.ndarray, list]], Dict[str, Union[np.ndarray, list]]]:
         """Load and process training data, splitting into train and validation sets."""
         # Process behaviors
@@ -1152,7 +1153,7 @@ class MINDDataset(BaseNewsDataset):
 
         if self.validation_split_strategy == "random":
             logger.info(
-                f"Using random split for validation: {self.validation_split_percentage*100}% of training behaviors data, seed: {self.validation_split_seed}"
+                f"Using random split for validation: {self.validation_split_percentage * 100}% of training behaviors data, seed: {self.validation_split_seed}"
             )
             # Shuffle the DataFrame
             shuffled_df = behaviors_df.sample(
@@ -1198,8 +1199,8 @@ class MINDDataset(BaseNewsDataset):
         return train_behaviors_data, val_behaviors_data
 
     def get_test_data(
-        self,
-        sampled_user_set: Optional[Set[str]] = None,
+            self,
+            sampled_user_set: Optional[Set[str]] = None,
     ) -> Dict[str, Union[np.ndarray, list]]:
         """Load and process test data"""
         test_dir = self.dataset_path / "valid"  # Use valid folder for testing
@@ -1223,7 +1224,7 @@ class MINDDataset(BaseNewsDataset):
             stage="test",
         )
 
-    def train_dataloader(self, batch_size: int):
+    def train_dataloader(self, batch_size: int, model_name: str = "nrms"):
         """Create training dataset with token-based inputs."""
         return NewsDataLoader.create_train_dataset(
             history_news_tokens=self.train_behaviors_data["history_news_tokens"],
@@ -1244,6 +1245,7 @@ class MINDDataset(BaseNewsDataset):
             process_category=self.process_category,
             process_subcategory=self.process_subcategory,
             process_user_id=self.process_user_id,
+            model_name=model_name,
         )
 
     def user_history_dataloader(self, mode: str) -> UserHistoryBatchDataloader:
@@ -1336,12 +1338,12 @@ class MINDDataset(BaseNewsDataset):
         )
 
     def _display_statistics(
-        self,
-        mode: str = "train",
-        processed_news: Optional[Dict[str, Any]] = None,
-        train_behaviors_data: Optional[Dict[str, Any]] = None,
-        val_behaviors_data: Optional[Dict[str, Any]] = None,
-        test_behaviors_data: Optional[Dict[str, Any]] = None,
+            self,
+            mode: str = "train",
+            processed_news: Optional[Dict[str, Any]] = None,
+            train_behaviors_data: Optional[Dict[str, Any]] = None,
+            val_behaviors_data: Optional[Dict[str, Any]] = None,
+            test_behaviors_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         if mode == "train":
             data_dict = {
@@ -1370,7 +1372,7 @@ class MINDDataset(BaseNewsDataset):
         return pat.findall(sent.lower()) if isinstance(sent, str) else []
 
     def tokenize_text(
-        self, text: str, vocab: Dict[str, int], max_len: int, unk_token_id: int, pad_token_id: int
+            self, text: str, vocab: Dict[str, int], max_len: int, unk_token_id: int, pad_token_id: int
     ) -> List[int]:
         """
         Converts a raw text string into a fixed-length sequence of numerical token IDs.

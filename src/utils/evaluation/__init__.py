@@ -1,6 +1,6 @@
 """Evaluation utilities for the BTC news recommendation framework."""
 
-from .evaluation import (
+from .main import (
     run_evaluation_epoch,
     get_main_comparison_metric,
     _run_initial_validation,

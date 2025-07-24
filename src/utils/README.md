@@ -54,7 +54,7 @@ from src.utils.training.orchestration import training_loop_orchestrator
 from src.utils.training.callbacks import FastEvaluationCallback
 
 # Evaluation
-from src.utils.evaluation.evaluation import run_evaluation_epoch
+from src.utils.evaluation.main import run_evaluation_epoch
 
 # Data
 from src.utils.data.embeddings import EmbeddingsManager

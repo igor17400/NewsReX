@@ -21,7 +21,7 @@ from .metrics.wrapper import create_news_metrics, LightweightNewsMetrics
 from .training.orchestration import training_loop_orchestrator
 from .training.callbacks import FastEvaluationCallback, SlowEvaluationCallback
 
-from .evaluation.evaluation import run_evaluation_epoch, get_main_comparison_metric
+from .evaluation.main import run_evaluation_epoch, get_main_comparison_metric
 
 from .data.embeddings import EmbeddingsManager
 from .data.cache_manager import CacheManager

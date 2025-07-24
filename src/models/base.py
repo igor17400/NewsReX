@@ -142,10 +142,10 @@ class BaseModel(keras.Model):
             _, labels, impression_id, cand_ids = impression
 
             # Get user vector for this impression
-            user_vector = user_vecs_dict[ops.convert_to_numpy(impression_id)[0]]
+            user_vector = user_vecs_dict[impression_id]
 
             # Get news vectors for candidate news
-            cand_ids_np = ops.convert_to_numpy(cand_ids)[0]  # Get numpy array of candidate IDs
+            cand_ids_np = ops.convert_to_numpy(cand_ids)  # Get numpy array of candidate IDs
             news_vectors = []
             for nid in cand_ids_np:
                 news_key = f"N{str(nid)}"
