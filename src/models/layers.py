@@ -75,29 +75,94 @@ class AdditiveAttentionLayer(layers.Layer):
             keras.KerasTensor: A 2D tensor `(batch_size, features)` representing the
                 weighted sum of the input sequence.
         """
+        import numpy as np
+        
+        # DEBUG: Check inputs to AdditiveAttentionLayer
+        # TODO: Remove debug prints after verifying the NaN issue is fixed
+        inputs_np = ops.convert_to_numpy(inputs)
+        if np.isnan(inputs_np).any() or np.isinf(inputs_np).any():
+            print(f"DEBUG AdditiveAttention: inputs has NaN/Inf: {np.isnan(inputs_np).any()}/{np.isinf(inputs_np).any()}")
+            print(f"DEBUG AdditiveAttention: inputs min/max: {np.min(inputs_np):.6f} / {np.max(inputs_np):.6f}")
+        
+        # DEBUG: Check weights
+        W_np = ops.convert_to_numpy(self.W)
+        b_np = ops.convert_to_numpy(self.b)
+        q_np = ops.convert_to_numpy(self.q)
+        
+        if np.isnan(W_np).any() or np.isinf(W_np).any():
+            print(f"DEBUG AdditiveAttention: W has NaN/Inf: {np.isnan(W_np).any()}/{np.isinf(W_np).any()}")
+            print(f"DEBUG AdditiveAttention: W min/max: {np.min(W_np):.6f} / {np.max(W_np):.6f}")
+        
+        if np.isnan(b_np).any() or np.isinf(b_np).any():
+            print(f"DEBUG AdditiveAttention: b has NaN/Inf: {np.isnan(b_np).any()}/{np.isinf(b_np).any()}")
+            print(f"DEBUG AdditiveAttention: b min/max: {np.min(b_np):.6f} / {np.max(b_np):.6f}")
+            
+        if np.isnan(q_np).any() or np.isinf(q_np).any():
+            print(f"DEBUG AdditiveAttention: q has NaN/Inf: {np.isnan(q_np).any()}/{np.isinf(q_np).any()}")
+            print(f"DEBUG AdditiveAttention: q min/max: {np.min(q_np):.6f} / {np.max(q_np):.6f}")
+        
         # 1. Dense transformation and non-linearity
         attention_hidden = ops.tanh(ops.matmul(inputs, self.W) + self.b)
 
         # 2. Compute attention scores
         attention_scores = ops.matmul(attention_hidden, self.q)
         attention_scores = ops.squeeze(attention_scores, axis=-1)
+        
+        # DEBUG: Check attention scores
+        scores_np = ops.convert_to_numpy(attention_scores)
+        if np.isnan(scores_np).any() or np.isinf(scores_np).any():
+            print(f"DEBUG AdditiveAttention: attention_scores has NaN/Inf: {np.isnan(scores_np).any()}/{np.isinf(scores_np).any()}")
+            print(f"DEBUG AdditiveAttention: attention_scores min/max: {np.min(scores_np):.6f} / {np.max(scores_np):.6f}")
 
         # 3. Apply exp and mask (following original paper implementation)
         if mask is None:
             attention = ops.exp(attention_scores)
         else:
             attention = ops.exp(attention_scores) * ops.cast(mask, dtype=self.compute_dtype)
+            
+        # DEBUG: Check attention after exp
+        attention_np = ops.convert_to_numpy(attention)
+        if np.isnan(attention_np).any() or np.isinf(attention_np).any():
+            print(f"DEBUG AdditiveAttention: attention has NaN/Inf: {np.isnan(attention_np).any()}/{np.isinf(attention_np).any()}")
+            print(f"DEBUG AdditiveAttention: attention min/max: {np.min(attention_np):.6f} / {np.max(attention_np):.6f}")
 
         # 4. Normalize attention weights
-        attention_weights = attention / (
-            ops.sum(attention, axis=-1, keepdims=True) + keras.backend.epsilon()
+        attention_sum = ops.sum(attention, axis=-1, keepdims=True)
+        
+        # DEBUG: Check attention sum
+        sum_np = ops.convert_to_numpy(attention_sum)
+        if np.isnan(sum_np).any() or np.isinf(sum_np).any() or (sum_np == 0).any():
+            print(f"DEBUG AdditiveAttention: attention_sum has NaN/Inf/Zero: {np.isnan(sum_np).any()}/{np.isinf(sum_np).any()}/{(sum_np == 0).any()}")
+            print(f"DEBUG AdditiveAttention: attention_sum min/max: {np.min(sum_np):.6f} / {np.max(sum_np):.6f}")
+        
+        # Handle the case when all inputs are masked (attention_sum = 0)
+        # In this case, return uniform attention weights instead of NaN
+        epsilon = keras.backend.epsilon()
+        attention_weights = ops.where(
+            attention_sum > epsilon,
+            attention / (attention_sum + epsilon),
+            ops.ones_like(attention) / ops.cast(ops.shape(attention)[-1], attention.dtype)
         )
+        
+        # DEBUG: Check final attention weights
+        weights_np = ops.convert_to_numpy(attention_weights)
+        if np.isnan(weights_np).any() or np.isinf(weights_np).any():
+            print(f"DEBUG AdditiveAttention: attention_weights has NaN/Inf: {np.isnan(weights_np).any()}/{np.isinf(weights_np).any()}")
+            print(f"DEBUG AdditiveAttention: attention_weights min/max: {np.min(weights_np):.6f} / {np.max(weights_np):.6f}")
 
         # 5. Compute weighted sum of inputs
         attention_weights_expanded = ops.expand_dims(attention_weights, axis=-1)
         weighted_input = inputs * attention_weights_expanded
 
-        return ops.sum(weighted_input, axis=1)
+        result = ops.sum(weighted_input, axis=1)
+        
+        # DEBUG: Check final result
+        result_np = ops.convert_to_numpy(result)
+        if np.isnan(result_np).any() or np.isinf(result_np).any():
+            print(f"DEBUG AdditiveAttention: result has NaN/Inf: {np.isnan(result_np).any()}/{np.isinf(result_np).any()}")
+            print(f"DEBUG AdditiveAttention: result min/max: {np.min(result_np):.6f} / {np.max(result_np):.6f}")
+
+        return result
 
     def compute_output_shape(self, input_shape):
         """Computes the output shape of the layer."""

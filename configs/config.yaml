@@ -21,7 +21,9 @@ train:
   num_epochs: 10
   learning_rate: 0.0001
   gradient_clip_val: 1.0
-  early_stopping_patience: 5
+  early_stopping:
+    patience: 5
+    min_improvement: 0.01
 
 # Default evaluation parameters (can be overridden by experiment)
 eval:
@@ -29,7 +31,6 @@ eval:
   batch_size: 128 # Batch size for evaluation
   save_predictions: true # Whether to save predictions to file
   predictions_dir: "predictions" # Directory to save predictions
-  run_initial_validation: true # <--- Add this line
   run_test_after_training: true # <--- (optional, if you want to run test after training)
 
 # Default logging configuration (can be overridden by experiment)

@@ -18,10 +18,10 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 
 from src.datasets.base import BaseNewsDataset
-from src.utils.cache_manager import CacheManager
-from src.utils.embeddings import EmbeddingsManager
-from src.utils.logging import setup_logging
-from src.utils.sampling import ImpressionSampler
+from src.utils.data.cache_manager import CacheManager
+from src.utils.data.embeddings import EmbeddingsManager
+from src.utils.io.logging import setup_logging
+from src.utils.data.sampling import ImpressionSampler
 from src.datasets.utils import (
     display_statistics,
     apply_data_fraction,
@@ -1223,7 +1223,7 @@ class MINDDataset(BaseNewsDataset):
             stage="test",
         )
 
-    def train_dataloader(self, batch_size: int) -> Any:
+    def train_dataloader(self, batch_size: int):
         """Create training dataset with token-based inputs."""
         return NewsDataLoader.create_train_dataset(
             history_news_tokens=self.train_behaviors_data["history_news_tokens"],

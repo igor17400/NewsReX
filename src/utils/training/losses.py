@@ -1,16 +1,16 @@
-from typing import Any, Optional
-
 import keras
+
+from typing import Any
 
 
 class NewsRecommenderLoss(keras.losses.Loss):
     """Base class for news recommendation losses."""
 
     def __init__(
-        self,
-        name: str = "news_recommender_loss",
-        reduction: str = "sum_over_batch_size",
-        **kwargs: Any,
+            self,
+            name: str = "news_recommender_loss",
+            reduction: str = "sum_over_batch_size",
+            **kwargs: Any,
     ) -> None:
         super().__init__(name=name, reduction=reduction, **kwargs)
 
@@ -34,12 +34,12 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
     """
 
     def __init__(
-        self,
-        name: str = "categorical_crossentropy",
-        from_logits: bool = False,
-        reduction: str = "sum_over_batch_size",
-        label_smoothing: float = 0.0,
-        **kwargs: Any,
+            self,
+            name: str = "categorical_crossentropy",
+            from_logits: bool = False,
+            reduction: str = "sum_over_batch_size",
+            label_smoothing: float = 0.0,
+            **kwargs: Any,
     ) -> None:
         super().__init__(name=name, reduction=reduction, **kwargs)
         self.from_logits = from_logits
@@ -79,12 +79,12 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
     """
 
     def __init__(
-        self,
-        name: str = "binary_crossentropy",
-        from_logits: bool = False,
-        reduction: str = "sum_over_batch_size",
-        label_smoothing: float = 0.0,
-        **kwargs: Any,
+            self,
+            name: str = "binary_crossentropy",
+            from_logits: bool = False,
+            reduction: str = "sum_over_batch_size",
+            label_smoothing: float = 0.0,
+            **kwargs: Any,
     ) -> None:
         super().__init__(name=name, reduction=reduction, **kwargs)
         self.from_logits = from_logits

@@ -1,7 +1,8 @@
 import keras
-import logging
 import jax
 import jax.numpy as jnp
+
+import logging
 from functools import partial
 
 # Setup logger
@@ -87,20 +88,20 @@ class NewsRecommenderMetrics:
         # Simple AUC implementation using ranking
         n_pos = jnp.sum(y_true)
         n_neg = jnp.sum(1 - y_true)
-        
+
         # Handle edge cases
         def compute_auc():
             # Get indices sorted by prediction scores (descending)
             sorted_indices = jnp.argsort(-y_pred)
             y_true_sorted = y_true[sorted_indices]
-            
+
             # Count inversions (positive examples ranked after negative examples)
             pos_ranks = jnp.cumsum(y_true_sorted)
             neg_count_before = jnp.arange(len(y_true_sorted)) + 1 - pos_ranks
             auc_sum = jnp.sum(y_true_sorted * neg_count_before)
-            
+
             return auc_sum / (n_pos * n_neg)
-        
+
         return jnp.where((n_pos > 0) & (n_neg > 0), compute_auc(), 0.5)
 
     def _compute_mrr_impl(self, y_true, y_score):
@@ -108,11 +109,11 @@ class NewsRecommenderMetrics:
         # Sort indices in descending order of scores
         order = jnp.argsort(-y_score)
         y_true_sorted = y_true[order]
-        
+
         # Calculate reciprocal ranks
         ranks = jnp.arange(1, len(y_true_sorted) + 1)
         rr_scores = y_true_sorted / ranks
-        
+
         # Return MRR
         n_relevant = jnp.sum(y_true)
         return jnp.where(n_relevant > 0, jnp.sum(rr_scores) / n_relevant, 0.0)
@@ -120,20 +121,20 @@ class NewsRecommenderMetrics:
     def _dcg_score_impl(self, y_true, y_score, k):
         """JAX implementation of Discounted Cumulative Gain (DCG)@k."""
         k = min(k, len(y_true))
-        
+
         # Sort by score in descending order and take top k
         order = jnp.argsort(-y_score)
         y_true_sorted = y_true[order[:k]]
-        
+
         # Calculate DCG
         gains = jnp.power(2.0, y_true_sorted) - 1.0
         discounts = jnp.log2(jnp.arange(2, k + 2))
-        
+
         return jnp.sum(gains / discounts)
 
     def _compute_ndcg_impl(self, y_true, y_score, k):
         """JAX implementation of Normalized DCG@k."""
         actual_dcg = self._dcg_score_jax(y_true, y_score, k)
         ideal_dcg = self._dcg_score_jax(y_true, y_true, k)  # Best possible DCG
-        
+
         return jnp.where(ideal_dcg > 0, actual_dcg / ideal_dcg, 0.0)

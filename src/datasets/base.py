@@ -6,8 +6,6 @@ from typing import Dict, Iterator, Tuple
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
-
 
 class BaseNewsDataset(ABC):
     """Abstract base class for news recommendation datasets"""
@@ -57,17 +55,17 @@ class BaseNewsDataset(ABC):
         pass
 
     @abstractmethod
-    def train_dataloader(self, batch_size: int) -> tf.data.Dataset:
+    def train_dataloader(self, batch_size: int):
         """Create training data loader"""
         pass
 
     @abstractmethod
-    def user_history_dataloader(self, mode: str) -> tf.data.Dataset:
+    def user_history_dataloader(self, mode: str):
         """Create user history data loader"""
         pass
 
     @abstractmethod
-    def news_dataloader(self) -> tf.data.Dataset:
+    def news_dataloader(self):
         """Create processed news data loader"""
         pass
 

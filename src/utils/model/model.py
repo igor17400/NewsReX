@@ -5,12 +5,12 @@ import hydra
 import keras
 from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
-from .losses import get_loss
+from ..training.losses import get_loss
 
 console = Console()
 
 
-def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[keras.Model, Any]:
+def initialize_model_and_dataset(cfg: DictConfig, training_metrics: list = None) -> Tuple[keras.Model, Any]:
     """Instantiate dataset and model based on Hydra configuration."""
     console.log("Initializing dataset provider...")
     dataset_provider: Any = hydra.utils.instantiate(cfg.dataset, mode="train")
@@ -73,9 +73,16 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[keras.Model, Any]:
         label_smoothing=cfg.model.loss.label_smoothing
     )
 
-    model.compile(optimizer=optimizer, loss=loss_function)
+    # Compile with metrics if provided
+    compile_kwargs = {"optimizer": optimizer, "loss": loss_function}
+    if training_metrics is not None:
+        compile_kwargs["metrics"] = training_metrics
+        
+    model.compile(**compile_kwargs)
+    
+    metrics_info = f", Metrics: {len(training_metrics)} metrics" if training_metrics else ""
     console.log(
-        f"Model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}"
+        f"Model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}{metrics_info}"
     )
 
     console.log(f"Mixed precision global policy: {keras.mixed_precision.global_policy().name}")

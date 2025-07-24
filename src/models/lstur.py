@@ -1,13 +1,13 @@
 from typing import Tuple, Dict, Any, Optional
 
-import tensorflow as tf
-from tensorflow.keras import layers
+import keras
+from keras import layers
 
 from .layers import AdditiveAttentionLayer, ComputeMasking, OverwriteMasking
 from .base import BaseModel
 
 
-class NewsInputSplitter(tf.keras.layers.Layer):
+class NewsInputSplitter(keras.layers.Layer):
     """Splits a concatenated news input into its components (title, category, subcategory)."""
 
     def __init__(self, title_length: int, **kwargs):
@@ -93,7 +93,7 @@ class LSTUR(BaseModel):
         self.seed = seed
         self.process_user_id = process_user_id
 
-        tf.random.set_seed(self.seed)
+        keras.utils.set_random_seed(self.seed)
 
         # Unpack processed data from the dataset
         self.vocab_size = processed_news["vocab_size"]
@@ -128,7 +128,7 @@ class LSTUR(BaseModel):
         return layers.Embedding(
             input_dim=self.vocab_size,
             output_dim=self.embedding_size,
-            embeddings_initializer=tf.keras.initializers.Constant(self.embeddings_matrix),
+            embeddings_initializer=keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
             mask_zero=False,
             name="word_embedding",
@@ -144,7 +144,7 @@ class LSTUR(BaseModel):
             name="user_embedding",
         )
 
-    def _build_category_encoder(self) -> tf.keras.Model:
+    def _build_category_encoder(self) -> keras.Model:
         """Builds the category encoder which processes category information.
 
         This method creates a Keras model that embeds topic indices and projects them
@@ -152,9 +152,9 @@ class LSTUR(BaseModel):
         vector representation for each topic.
 
         Returns:
-            tf.keras.Model: A Keras model that encodes topic information.
+            keras.Model: A Keras model that encodes topic information.
         """
-        input_category = tf.keras.Input(shape=(1,), dtype="int32", name="category_id")
+        input_category = keras.Input(shape=(1,), dtype="int32", name="category_id")
 
         category_embedding = layers.Embedding(
             self.num_categories + 1,
@@ -167,15 +167,15 @@ class LSTUR(BaseModel):
         category_dense = layers.Dense(
             self.cnn_filter_num,
             activation=self.cnn_activation,
-            bias_initializer=tf.keras.initializers.Zeros(),
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=keras.initializers.Zeros(),
+            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
             name="category_projection",
         )(category_emb)
         category_vector = layers.Reshape((1, self.cnn_filter_num))(category_dense)
 
-        return tf.keras.Model(input_category, category_vector, name="category_encoder")
+        return keras.Model(input_category, category_vector, name="category_encoder")
 
-    def _build_subcategory_encoder(self) -> tf.keras.Model:
+    def _build_subcategory_encoder(self) -> keras.Model:
         """Builds the subcategory encoder which processes subcategory information.
 
         This method creates a Keras model that embeds subtopic indices and projects them
@@ -183,9 +183,9 @@ class LSTUR(BaseModel):
         vector representation for each subtopic.
 
         Returns:
-            tf.keras.Model: A Keras model that encodes subtopic information.
+            keras.Model: A Keras model that encodes subtopic information.
         """
-        input_subcategory = tf.keras.Input(shape=(1,), dtype="int32", name="subcategory_id")
+        input_subcategory = keras.Input(shape=(1,), dtype="int32", name="subcategory_id")
 
         subcategory_embedding = layers.Embedding(
             self.num_subcategories + 1,
@@ -198,19 +198,19 @@ class LSTUR(BaseModel):
         subcategory_dense = layers.Dense(
             self.cnn_filter_num,
             activation=self.cnn_activation,
-            bias_initializer=tf.keras.initializers.Zeros(),
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=keras.initializers.Zeros(),
+            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
             name="subcategory_projection",
         )(subcategory_emb)
         subcategory_vector = layers.Reshape((1, self.cnn_filter_num))(subcategory_dense)
 
-        return tf.keras.Model(input_subcategory, subcategory_vector, name="subcategory_encoder")
+        return keras.Model(input_subcategory, subcategory_vector, name="subcategory_encoder")
 
-    def _build_newsencoder(self) -> tf.keras.Model:
+    def _build_newsencoder(self) -> keras.Model:
         """Builds the news encoder which processes news titles and topics."""
         if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
             # News input includes title + category + subcategory
-            news_input = tf.keras.Input(
+            news_input = keras.Input(
                 shape=(self.max_title_length + 2,),  # title + category + subcategory
                 dtype="int32",
                 name="news_tokens",
@@ -232,8 +232,8 @@ class LSTUR(BaseModel):
                 activation=self.cnn_activation,
                 padding="same",
                 name="title_cnn",
-                bias_initializer=tf.keras.initializers.Zeros(),
-                kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+                bias_initializer=keras.initializers.Zeros(),
+                kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
             )(title_dropout)
 
             title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(title_cnn)
@@ -260,10 +260,10 @@ class LSTUR(BaseModel):
                 concat_views
             )
 
-            return tf.keras.Model(news_input, news_vector, name="news_encoder")
+            return keras.Model(news_input, news_vector, name="news_encoder")
 
         # Fallback to title-only encoding (original behavior)
-        input_title = tf.keras.Input(
+        input_title = keras.Input(
             shape=(self.max_title_length,), dtype="int32", name="news_tokens"
         )
 
@@ -276,8 +276,8 @@ class LSTUR(BaseModel):
             activation=self.cnn_activation,
             padding="same",
             name="title_cnn",
-            bias_initializer=tf.keras.initializers.Zeros(),
-            kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+            bias_initializer=keras.initializers.Zeros(),
+            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
         )(title_dropout)
 
         title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(title_cnn)
@@ -289,13 +289,13 @@ class LSTUR(BaseModel):
             self.attention_hidden_dim, name="title_word_attention"
         )(masked_title)
 
-        return tf.keras.Model(input_title, title_attention, name="news_encoder")
+        return keras.Model(input_title, title_attention, name="news_encoder")
 
-    def _build_userencoder(self) -> tf.keras.Model:
+    def _build_userencoder(self) -> keras.Model:
         """Builds the user encoder which combines long-term and short-term representations."""
         if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
             # Input includes title + category + subcategory concatenated
-            history_input = tf.keras.Input(
+            history_input = keras.Input(
                 shape=(
                     self.max_history_length,
                     self.max_title_length + 2,
@@ -305,13 +305,13 @@ class LSTUR(BaseModel):
             )
         else:
             # Original behavior - just title tokens
-            history_input = tf.keras.Input(
+            history_input = keras.Input(
                 shape=(self.max_history_length, self.max_title_length),
                 dtype="int32",
                 name="history_tokens",
             )
 
-        user_ids = tf.keras.Input(
+        user_ids = keras.Input(
             shape=(1,),
             dtype="int32",
             name="user_ids",
@@ -327,9 +327,9 @@ class LSTUR(BaseModel):
             if self.user_representation_type == "lstm":
                 user_present = layers.LSTM(
                     self.cnn_filter_num,
-                    kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=tf.keras.initializers.Zeros(),
+                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    bias_initializer=keras.initializers.Zeros(),
                 )(
                     layers.Masking(mask_value=0.0)(click_title_presents),
                     initial_state=[long_u_emb, long_u_emb],  # LSTM needs [h, c]
@@ -337,9 +337,9 @@ class LSTUR(BaseModel):
             else:  # gru
                 user_present = layers.GRU(
                     self.cnn_filter_num,
-                    kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=tf.keras.initializers.Zeros(),
+                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    bias_initializer=keras.initializers.Zeros(),
                 )(
                     layers.Masking(mask_value=0.0)(click_title_presents),
                     initial_state=[long_u_emb],  # GRU only needs [h]
@@ -348,33 +348,33 @@ class LSTUR(BaseModel):
             if self.user_representation_type == "lstm":
                 short_uemb = layers.LSTM(
                     self.cnn_filter_num,
-                    kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=tf.keras.initializers.Zeros(),
+                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    bias_initializer=keras.initializers.Zeros(),
                 )(layers.Masking(mask_value=0.0)(click_title_presents))
             else:  # gru
                 short_uemb = layers.GRU(
                     self.cnn_filter_num,
-                    kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=tf.keras.initializers.Zeros(),
+                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
+                    bias_initializer=keras.initializers.Zeros(),
                 )(layers.Masking(mask_value=0.0)(click_title_presents))
 
             user_present = layers.Concatenate()([short_uemb, long_u_emb])
             user_present = layers.Dense(
                 self.cnn_filter_num,
-                bias_initializer=tf.keras.initializers.Zeros(),
-                kernel_initializer=tf.keras.initializers.glorot_uniform(seed=self.seed),
+                bias_initializer=keras.initializers.Zeros(),
+                kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
             )(user_present)
 
-        return tf.keras.Model([history_input, user_ids], user_present, name="user_encoder")
+        return keras.Model([history_input, user_ids], user_present, name="user_encoder")
 
-    def _build_graph_models(self) -> Tuple[tf.keras.Model, tf.keras.Model]:
+    def _build_graph_models(self) -> Tuple[keras.Model, keras.Model]:
         """Builds the main training and scoring models."""
         # --- Inputs for Training Model ---
         if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
             # History inputs with category and subcategory information
-            history_tokens_input_train = tf.keras.Input(
+            history_tokens_input_train = keras.Input(
                 shape=(
                     self.max_history_length,
                     self.max_title_length + 2,
@@ -382,7 +382,7 @@ class LSTUR(BaseModel):
                 dtype="int32",
                 name="history_tokens_train",
             )
-            candidate_tokens_input_train = tf.keras.Input(
+            candidate_tokens_input_train = keras.Input(
                 shape=(
                     self.max_impressions_length,
                     self.max_title_length + 2,
@@ -392,18 +392,18 @@ class LSTUR(BaseModel):
             )
         else:
             # Original behavior - just title tokens
-            history_tokens_input_train = tf.keras.Input(
+            history_tokens_input_train = keras.Input(
                 shape=(self.max_history_length, self.max_title_length),
                 dtype="int32",
                 name="history_tokens_train",
             )
-            candidate_tokens_input_train = tf.keras.Input(
+            candidate_tokens_input_train = keras.Input(
                 shape=(self.max_impressions_length, self.max_title_length),
                 dtype="int32",
                 name="candidate_tokens_train",
             )
 
-        user_ids = tf.keras.Input(
+        user_ids = keras.Input(
             shape=(1,),  # Single user ID per batch item
             dtype="int32",
             name="user_ids_train",
@@ -426,7 +426,7 @@ class LSTUR(BaseModel):
         # Apply softmax for training
         preds_train = layers.Activation("softmax", name="softmax_activation_train")(scores)
 
-        training_model = tf.keras.Model(
+        training_model = keras.Model(
             inputs=[history_tokens_input_train, user_ids, candidate_tokens_input_train],
             outputs=preds_train,
             name="lstur_training_model",
@@ -434,7 +434,7 @@ class LSTUR(BaseModel):
 
         # --- Inputs for Scorer Model ---
         # History Inputs
-        hist_tokens_input_score = tf.keras.Input(
+        hist_tokens_input_score = keras.Input(
             shape=(self.max_history_length, self.max_title_length),
             dtype="int32",
             name="history_tokens_score",
@@ -442,26 +442,26 @@ class LSTUR(BaseModel):
 
         if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
             # History inputs with category and subcategory information
-            hist_category_input_score = tf.keras.Input(
+            hist_category_input_score = keras.Input(
                 shape=(self.max_history_length, 1),
                 dtype="int32",
                 name="history_category_score",
             )
-            hist_subcategory_input_score = tf.keras.Input(
+            hist_subcategory_input_score = keras.Input(
                 shape=(self.max_history_length, 1),
                 dtype="int32",
                 name="history_subcategory_score",
             )
 
         # User IDs
-        user_ids_score = tf.keras.Input(
+        user_ids_score = keras.Input(
             shape=(1,),  # Single user ID per batch item
             dtype="int32",
             name="user_ids_score",
         )
 
         # Candidate Inputs
-        cand_tokens_input_score = tf.keras.Input(
+        cand_tokens_input_score = keras.Input(
             shape=(1, self.max_title_length),
             dtype="int32",
             name="candidate_tokens_score",
@@ -469,12 +469,12 @@ class LSTUR(BaseModel):
 
         if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
             # Candidate inputs with category and subcategory information
-            cand_category_input_score = tf.keras.Input(
+            cand_category_input_score = keras.Input(
                 shape=(1, 1),
                 dtype="int32",
                 name="candidate_category_score",
             )
-            cand_subcategory_input_score = tf.keras.Input(
+            cand_subcategory_input_score = keras.Input(
                 shape=(1, 1),
                 dtype="int32",
                 name="candidate_subcategory_score",
@@ -514,13 +514,13 @@ class LSTUR(BaseModel):
         pred_score = layers.Activation("sigmoid", name="sigmoid_activation_score")(pred_score)
 
         if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            scorer_model = tf.keras.Model(
+            scorer_model = keras.Model(
                 inputs=[history_concat_score, user_ids_score, candidate_concat_score],
                 outputs=pred_score,
                 name="lstur_scorer_model",
             )
         else:
-            scorer_model = tf.keras.Model(
+            scorer_model = keras.Model(
                 inputs=[hist_tokens_input_score, user_ids_score, cand_tokens_input_score],
                 outputs=pred_score,
                 name="lstur_scorer_model",
@@ -528,7 +528,7 @@ class LSTUR(BaseModel):
 
         return training_model, scorer_model
 
-    def call(self, inputs: Dict[str, tf.Tensor], training: Optional[bool] = None) -> tf.Tensor:
+    def call(self, inputs: Dict[str, keras.KerasTensor], training: Optional[bool] = None) -> keras.KerasTensor:
         """Main forward pass of the LSTUR model.
 
         This method serves as the main entry point for both training and inference.
@@ -539,7 +539,7 @@ class LSTUR(BaseModel):
             training (bool, optional): Whether the model is in training mode
 
         Returns:
-            tf.Tensor: Model predictions
+            keras.KerasTensor: Model predictions
         """
         # Training mode - use training model
         if training:
@@ -548,7 +548,7 @@ class LSTUR(BaseModel):
         # Inference mode - use scorer model
         return self._handle_inference(inputs)
 
-    def _handle_training(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+    def _handle_training(self, inputs: Dict[str, keras.KerasTensor]) -> keras.KerasTensor:
         """Handle the forward pass during training mode.
 
         Args:
@@ -562,7 +562,7 @@ class LSTUR(BaseModel):
                 - 'cand_subcategory': Candidate news subcategories (if category encoder enabled)
 
         Returns:
-            tf.Tensor: Softmax probabilities for each candidate
+            keras.KerasTensor: Softmax probabilities for each candidate
                 Shape: (batch_size, num_candidates)
         """
         history_tokens = inputs["hist_tokens"]
@@ -576,9 +576,9 @@ class LSTUR(BaseModel):
             hist_subcategory = inputs.get("hist_subcategory")
             if hist_category is not None and hist_subcategory is not None:
                 # Expand dimensions to match the rank of title tokens
-                hist_category = tf.expand_dims(hist_category, axis=-1)
-                hist_subcategory = tf.expand_dims(hist_subcategory, axis=-1)
-                history_tokens = tf.concat(
+                hist_category = keras.ops.expand_dims(hist_category, axis=-1)
+                hist_subcategory = keras.ops.expand_dims(hist_subcategory, axis=-1)
+                history_tokens = keras.ops.concatenate(
                     [history_tokens, hist_category, hist_subcategory], axis=-1
                 )
 
@@ -587,15 +587,15 @@ class LSTUR(BaseModel):
             cand_subcategory = inputs.get("cand_subcategory")
             if cand_category is not None and cand_subcategory is not None:
                 # Expand dimensions to match the rank of title tokens
-                cand_category = tf.expand_dims(cand_category, axis=-1)
-                cand_subcategory = tf.expand_dims(cand_subcategory, axis=-1)
-                candidate_tokens = tf.concat(
+                cand_category = keras.ops.expand_dims(cand_category, axis=-1)
+                cand_subcategory = keras.ops.expand_dims(cand_subcategory, axis=-1)
+                candidate_tokens = keras.ops.concatenate(
                     [candidate_tokens, cand_category, cand_subcategory], axis=-1
                 )
 
         return self.training_model([history_tokens, user_ids, candidate_tokens], training=True)
 
-    def _handle_inference(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+    def _handle_inference(self, inputs: Dict[str, keras.KerasTensor]) -> keras.KerasTensor:
         """Handle the forward pass during inference mode.
 
         Args:
@@ -605,7 +605,7 @@ class LSTUR(BaseModel):
                 - Category/subcategory inputs if category encoder is enabled
 
         Returns:
-            tf.Tensor: Model predictions
+            keras.KerasTensor: Model predictions
         """
         # Case 1: Single candidate scoring
         if "single_candidate_tokens" in inputs:
@@ -624,9 +624,9 @@ class LSTUR(BaseModel):
                 hist_subcategory = inputs.get("history_subcategory")
                 if hist_category is not None and hist_subcategory is not None:
                     # Expand dimensions to match the rank of title tokens
-                    hist_category = tf.expand_dims(hist_category, axis=-1)
-                    hist_subcategory = tf.expand_dims(hist_subcategory, axis=-1)
-                    history_tokens = tf.concat(
+                    hist_category = keras.ops.expand_dims(hist_category, axis=-1)
+                    hist_subcategory = keras.ops.expand_dims(hist_subcategory, axis=-1)
+                    history_tokens = keras.ops.concatenate(
                         [history_tokens, hist_category, hist_subcategory], axis=-1
                     )
 
@@ -635,9 +635,9 @@ class LSTUR(BaseModel):
                 cand_subcategory = inputs.get("single_candidate_subcategory")
                 if cand_category is not None and cand_subcategory is not None:
                     # Expand dimensions to match the rank of title tokens
-                    cand_category = tf.expand_dims(cand_category, axis=-1)
-                    cand_subcategory = tf.expand_dims(cand_subcategory, axis=-1)
-                    candidate_tokens = tf.concat(
+                    cand_category = keras.ops.expand_dims(cand_category, axis=-1)
+                    cand_subcategory = keras.ops.expand_dims(cand_subcategory, axis=-1)
+                    candidate_tokens = keras.ops.concatenate(
                         [candidate_tokens, cand_category, cand_subcategory], axis=-1
                     )
 
@@ -651,7 +651,7 @@ class LSTUR(BaseModel):
             "Invalid input format for inference. Expected 'single_candidate_tokens' or 'cand_tokens'"
         )
 
-    def _score_multiple_candidates(self, inputs: Dict[str, tf.Tensor]) -> tf.Tensor:
+    def _score_multiple_candidates(self, inputs: Dict[str, keras.KerasTensor]) -> keras.KerasTensor:
         """Score multiple candidates for each user in the batch.
 
         Args:
@@ -662,7 +662,7 @@ class LSTUR(BaseModel):
                 - Category/subcategory inputs if category encoder is enabled
 
         Returns:
-            tf.Tensor: Scores for all candidates
+            keras.KerasTensor: Scores for all candidates
                 Shape: (batch_size, num_candidates)
         """
         history_tokens_batch = inputs["history_tokens"]
@@ -675,7 +675,7 @@ class LSTUR(BaseModel):
             hist_category = inputs.get("history_category")
             hist_subcategory = inputs.get("history_subcategory")
             if hist_category is not None and hist_subcategory is not None:
-                history_tokens_batch = tf.concat(
+                history_tokens_batch = keras.ops.concatenate(
                     [history_tokens_batch, hist_category, hist_subcategory], axis=-1
                 )
 
@@ -683,36 +683,36 @@ class LSTUR(BaseModel):
             cand_category = inputs.get("cand_category")
             cand_subcategory = inputs.get("cand_subcategory")
             if cand_category is not None and cand_subcategory is not None:
-                candidates_batch = tf.concat(
+                candidates_batch = keras.ops.concatenate(
                     [candidates_batch, cand_category, cand_subcategory], axis=-1
                 )
 
-        batch_size = tf.shape(history_tokens_batch)[0]
-        num_candidates = tf.shape(candidates_batch)[1]
+        batch_size = keras.ops.shape(history_tokens_batch)[0]
+        num_candidates = keras.ops.shape(candidates_batch)[1]
 
         all_scores = []
 
         # Process each item in the batch
         for i in range(batch_size):
             # Get history and user ID for current item
-            current_history_tokens = tf.expand_dims(history_tokens_batch[i], 0)
-            current_user_ids = tf.expand_dims(user_ids_batch[i], 0)
+            current_history_tokens = keras.ops.expand_dims(history_tokens_batch[i], 0)
+            current_user_ids = keras.ops.expand_dims(user_ids_batch[i], 0)
 
             # Score each candidate against this history
             candidate_scores = []
             for j in range(num_candidates):
-                current_candidate = tf.expand_dims(candidates_batch[i, j], 0)
+                current_candidate = keras.ops.expand_dims(candidates_batch[i, j], 0)
                 score = self.scorer_model(
                     [current_history_tokens, current_user_ids, current_candidate], training=False
                 )
                 candidate_scores.append(score)
 
             # Combine scores for all candidates of this item
-            item_scores = tf.concat(candidate_scores, axis=1)
+            item_scores = keras.ops.concatenate(candidate_scores, axis=1)
             all_scores.append(item_scores)
 
         # Combine scores for all items in batch
-        return tf.concat(all_scores, axis=0)
+        return keras.ops.concatenate(all_scores, axis=0)
 
     def get_config(self):
         """Returns the configuration of the LSTUR model for serialization.

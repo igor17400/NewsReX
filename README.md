@@ -97,7 +97,7 @@ BTC is a modular and extensible framework for news recommendation systems resear
     Poetry will now install the project's dependencies into your `btc_env`.
 
     ```bash
-    poetry install --no-root # '--no-root' prevents installing BTC as an editable package initially
+    poetry install 
     ```
 
 4.  **Activate Poetry's shell (optional but recommended for development):**
@@ -113,14 +113,8 @@ BTC is a modular and extensible framework for news recommendation systems resear
     pre-commit install
     ```
 
-6.  **Install JAX Backend Dependencies:**
-    For performance optimization with Keras 3 + JAX backend:
-
-    ```bash
-    pip install -r requirements_keras3_jax.txt
-    ```
-
-    To test if JAX is properly using your GPU:
+6.  **JAX Backend Dependencies:**
+    Test if JAX is properly using your GPU:
 
     ```bash
     python test_jax_gpu.py

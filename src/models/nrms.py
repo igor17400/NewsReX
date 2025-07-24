@@ -1,4 +1,5 @@
 from typing import Tuple, Dict, Any
+import numpy as np
 
 # Set JAX backend for Keras 3
 
@@ -43,6 +44,21 @@ class NRMS(BaseModel):
 
         self.vocab_size = processed_news["vocab_size"]
         self.embeddings_matrix = processed_news["embeddings"]
+        
+        # DEBUG: Check embeddings matrix for NaN
+        import numpy as np
+        if np.isnan(self.embeddings_matrix).any():
+            print(f"WARNING: Embeddings matrix contains NaN values!")
+            print(f"Number of NaN values: {np.isnan(self.embeddings_matrix).sum()}")
+            nan_indices = np.where(np.isnan(self.embeddings_matrix))[0]
+            print(f"NaN at token indices: {nan_indices[:10]}...")  # Show first 10
+        else:
+            print(f"INFO: Embeddings matrix is clean (no NaN)")
+            print(f"      Shape: {self.embeddings_matrix.shape}")
+            print(f"      Min: {np.min(self.embeddings_matrix):.6f}, Max: {np.max(self.embeddings_matrix):.6f}")
+            # Check for padding token embedding
+            padding_embedding = self.embeddings_matrix[0]  # Usually index 0 is padding
+            print(f"      Padding token embedding norm: {np.linalg.norm(padding_embedding):.6f}")
 
         # Build components
         self.embedding_layer = layers.Embedding(
@@ -50,7 +66,7 @@ class NRMS(BaseModel):
             output_dim=self.embedding_size,
             embeddings_initializer=keras.initializers.Constant(self.embeddings_matrix),
             trainable=True,
-            mask_zero=False,
+            mask_zero=True,  # Enable automatic masking for padding tokens
             name="word_embedding",
         )
 
@@ -59,6 +75,7 @@ class NRMS(BaseModel):
 
         # Build the main training model and the scorer model
         self.training_model, self.scorer_model = self._build_graph_models()
+    
 
     def _build_newsencoder(self) -> keras.Model:
         """Build the news encoder component.
@@ -77,7 +94,7 @@ class NRMS(BaseModel):
         sequences_input_title = keras.Input(
             shape=(self.max_title_length,), dtype="int32", name="news_tokens_input"
         )
-
+        
         # Word Embedding
         embedded_sequences_title = self.embedding_layer(sequences_input_title)
 
@@ -85,23 +102,26 @@ class NRMS(BaseModel):
         y = layers.Dropout(self.dropout_rate, seed=self.seed)(embedded_sequences_title)
 
         # Multi-Head Self-Attention over words in a title
+        # Create padding mask for attention
+        padding_mask = ops.not_equal(sequences_input_title, 0)  # True for non-padding
+        
         y = layers.MultiHeadAttention(
             num_heads=self.multiheads,
             key_dim=self.head_dim,
             dropout=self.dropout_rate,
             kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed),
             name="title_word_self_attention",
-        )(y, y, y)
+        )(y, y, y, key_mask=padding_mask)
 
         # Apply dropout after self-attention
         y = layers.Dropout(self.dropout_rate, seed=self.seed)(y)
 
-        # Additive Attention to get a single news vector
+        # Additive Attention to get a single news vector with masking
         pred_title = AdditiveAttentionLayer(
             query_vec_dim=self.attention_hidden_dim,
             seed=self.seed,
             name="title_additive_attention",
-        )(y)
+        )(y, mask=padding_mask)
 
         return keras.Model(sequences_input_title, pred_title, name="news_encoder")
 
@@ -130,21 +150,25 @@ class NRMS(BaseModel):
             self.newsencoder, name="time_distributed_news_encoder"
         )(his_input_title_tokens)
 
-        # Self-Attention over browsed news
+        # Create mask for history items (shape: batch_size, history_length)
+        # Check if any token in each news item is non-zero
+        history_mask = ops.any(ops.not_equal(his_input_title_tokens, 0), axis=-1)
+
+        # Self-Attention over browsed news with key_mask
         y = layers.MultiHeadAttention(
             num_heads=self.multiheads,
             key_dim=self.head_dim,
             dropout=self.dropout_rate,
             kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed),
             name="browsed_news_self_attention",
-        )(click_title_presents, click_title_presents, click_title_presents)
+        )(click_title_presents, click_title_presents, click_title_presents, key_mask=history_mask)
 
-        # Additive Attention to get a single user vector
+        # Additive Attention to get a single user vector with explicit masking
         user_present = AdditiveAttentionLayer(
             query_vec_dim=self.attention_hidden_dim,
             seed=self.seed,
             name="user_additive_attention",
-        )(y)
+        )(y, mask=history_mask)
 
         return keras.Model(his_input_title_tokens, user_present, name="user_encoder")
 
@@ -341,29 +365,42 @@ class NRMS(BaseModel):
 
         # Get user representations for entire batch
         user_representations = self.userencoder(history_batch, training=False)
-        
-        # Debug: print user representations shape
+
+        # Debug: print user representations shape and check for NaN/Inf
         print(f"DEBUG: user_representations.shape = {ops.shape(user_representations)}")
+        user_np = ops.convert_to_numpy(user_representations)
+        print(f"DEBUG: user_representations has NaN: {np.isnan(user_np).any()}")
+        print(f"DEBUG: user_representations has Inf: {np.isinf(user_np).any()}")
+        print(f"DEBUG: user_representations min/max: {np.min(user_np):.6f} / {np.max(user_np):.6f}")
 
         # Process all candidates efficiently
         batch_size = ops.shape(candidates_batch)[0]
         num_candidates = ops.shape(candidates_batch)[1]
 
         # Reshape candidates for batch processing
-        candidates_flat = ops.reshape(candidates_batch,
-                                      (batch_size * num_candidates, self.max_title_length))
+        candidates_flat = ops.reshape(
+            candidates_batch,
+            (batch_size * num_candidates, self.max_title_length)
+        )
 
         # Get candidate representations
         candidate_representations_flat = self.newsencoder(candidates_flat, training=False)
 
         # Reshape back to batch format
-        candidate_representations = ops.reshape(candidate_representations_flat,
-                                                (batch_size, num_candidates, self.embedding_size))
+        candidate_representations = ops.reshape(
+            candidate_representations_flat,
+            (batch_size, num_candidates, self.embedding_size)
+        )
 
-        # Debug: print candidate representations shape
+        # Debug: print candidate representations shape and check for NaN/Inf
         print(f"DEBUG: candidate_representations.shape = {ops.shape(candidate_representations)}")
         print(f"DEBUG: candidate_representations_flat.shape = {ops.shape(candidate_representations_flat)}")
         print(f"DEBUG: batch_size = {batch_size}, num_candidates = {num_candidates}, embedding_size = {self.embedding_size}")
+        
+        candidate_np = ops.convert_to_numpy(candidate_representations)
+        print(f"DEBUG: candidate_representations has NaN: {np.isnan(candidate_np).any()}")
+        print(f"DEBUG: candidate_representations has Inf: {np.isinf(candidate_np).any()}")
+        print(f"DEBUG: candidate_representations min/max: {np.min(candidate_np):.6f} / {np.max(candidate_np):.6f}")
 
         # Debug: print exact shapes before einsum
         print(f"DEBUG: About to do einsum with:")
@@ -375,14 +412,20 @@ class NRMS(BaseModel):
         # Expand user_representations to match candidate dimensions for element-wise multiplication
         # user_representations: (batch_size, embedding_size) -> (batch_size, 1, embedding_size)
         user_expanded = ops.expand_dims(user_representations, axis=1)  # (64, 1, 300)
-        
+
         # Element-wise multiplication: (64, 5, 300) * (64, 1, 300) -> (64, 5, 300)
         similarity = candidate_representations * user_expanded
-        
+
         # Sum over the feature dimension to get scores: (64, 5, 300) -> (64, 5)
         scores = ops.sum(similarity, axis=-1)
-        
+
         print(f"DEBUG: scores.shape = {ops.shape(scores)}")
+        
+        # Debug: check final scores for NaN/Inf
+        scores_np = ops.convert_to_numpy(scores)
+        print(f"DEBUG: final scores has NaN: {np.isnan(scores_np).any()}")
+        print(f"DEBUG: final scores has Inf: {np.isinf(scores_np).any()}")
+        print(f"DEBUG: final scores min/max: {np.min(scores_np):.6f} / {np.max(scores_np):.6f}")
 
         return scores
 
