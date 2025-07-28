@@ -64,6 +64,15 @@ NewsRex is a modular and extensible framework for news recommendation systems re
     ```
     *Note: We will configure Poetry to use your conda environment in the next steps.*
 
+
+5. **If you're running poetry with an ssh connnection maybe you need to execute the following:**
+
+    ```
+    export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
+    ```
+
+    Reference: https://github.com/python-poetry/poetry/issues/1917
+
 ### Installation
 
 1.  **Clone the repository:**
@@ -107,7 +116,7 @@ NewsRex is a modular and extensible framework for news recommendation systems re
     poetry shell
     ```
 
-5.  **Set up pre-commit hooks:**
+5.  **Set up pre-commit hooks:** (NOT SUPPORTED AT THE MOMENT)
 
     ```bash
     pre-commit install

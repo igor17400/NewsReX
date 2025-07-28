@@ -23,8 +23,8 @@ from .training.callbacks import FastEvaluationCallback, SlowEvaluationCallback
 
 from .evaluation.main import run_evaluation_epoch, get_main_comparison_metric
 
-from .data.embeddings import EmbeddingsManager
-from .data.cache_manager import CacheManager
+from .data_aux.embeddings import EmbeddingsManager
+from .data_aux.cache_manager import CacheManager
 
 from .device.device import setup_device
 
@@ -47,10 +47,6 @@ __all__ = [
     # Evaluation
     "run_evaluation_epoch",
     "get_main_comparison_metric",
-    
-    # Data
-    "EmbeddingsManager",
-    "CacheManager",
     
     # Device
     "setup_device",

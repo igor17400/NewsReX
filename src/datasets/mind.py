@@ -18,10 +18,10 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRemainingColumn
 
 from src.datasets.base import BaseNewsDataset
-from src.utils.data.cache_manager import CacheManager
-from src.utils.data.embeddings import EmbeddingsManager
+from src.utils.data_aux.cache_manager import CacheManager
+from src.utils.data_aux.embeddings import EmbeddingsManager
 from src.utils.io.logging import setup_logging
-from src.utils.data.sampling import ImpressionSampler
+from src.utils.data_aux.sampling import ImpressionSampler
 from src.datasets.utils import (
     display_statistics,
     apply_data_fraction,
