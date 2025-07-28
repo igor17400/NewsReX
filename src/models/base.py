@@ -1,14 +1,14 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import Model
+import keras
+from keras import ops
 from rich.progress import Progress
 
-from utils.saving import save_predictions_to_file_fn
-from datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
+from src.utils.io.saving import save_predictions_to_file_fn
+from src.datasets.dataloader import NewsBatchDataloader, UserHistoryBatchDataloader
 
 
-class BaseModel(Model):
+class BaseModel(keras.Model):
     """Base class for news recommendation models.
 
     This class provides common functionality for news recommendation models,
@@ -17,8 +17,12 @@ class BaseModel(Model):
 
     def __init__(self, name: str = "base_news_recommender"):
         super().__init__(name=name)
-        policy = tf.keras.mixed_precision.global_policy()
-        self.float_dtype = tf.dtypes.as_dtype(policy.compute_dtype)
+        
+        # Attributes to be set by subclasses
+        self.newsencoder: Optional[keras.Model] = None
+        self.userencoder: Optional[keras.Model] = None 
+        self.process_user_id: bool = False
+        self.float_dtype: str = "float32"  # Will be set by training config
 
     def precompute_news_vectors(
         self,
@@ -46,10 +50,19 @@ class BaseModel(Model):
             news_ids = batch["news_id"]
             news_features = batch["news_features"]
 
-            batch_vecs = self.newsencoder(news_features, training=False).numpy()
+            if self.newsencoder is None:
+                raise RuntimeError("News Encoder not initialized. Ensure the model is properly built.")
+            batch_vecs = ops.convert_to_numpy(
+                self.newsencoder(news_features, training=False)
+            )
+            
+            # Debug: Check for NaN/Inf in news vectors
+            if np.isnan(batch_vecs).any() or np.isinf(batch_vecs).any():
+                print(f"DEBUG: batch_vecs has NaN/Inf: {np.isnan(batch_vecs).any()}/{np.isinf(batch_vecs).any()}")
+                print(f"DEBUG: batch_vecs min/max: {np.min(batch_vecs):.6f} / {np.max(batch_vecs):.6f}")
 
             for i, news_id in enumerate(news_ids):
-                news_vecs_dict[news_id.numpy().decode("utf-8")] = batch_vecs[i]
+                news_vecs_dict[ops.convert_to_numpy(news_id).item()] = batch_vecs[i]
 
             progress.update(news_progress, advance=len(news_ids))
 
@@ -73,16 +86,25 @@ class BaseModel(Model):
             "Computing user vectors...", total=len(user_dataloader), visible=True
         )
 
+        if self.userencoder is None:
+            raise RuntimeError("User Encoder not initialized. Ensure the model is properly built.")
+
         for impression_ids, user_ids, features in user_dataloader:
             # Get user representation from history
-            if self.process_user_id:
+            if self.process_user_id: # Used for LSTUR model
                 user_vec = self.userencoder([features, user_ids], training=False)
             else:
                 user_vec = self.userencoder(features, training=False)
+            
+            # Debug: Check for NaN/Inf in user vectors
+            user_vec_np = ops.convert_to_numpy(user_vec)
+            if np.isnan(user_vec_np).any() or np.isinf(user_vec_np).any():
+                print(f"DEBUG: user_vec has NaN/Inf: {np.isnan(user_vec_np).any()}/{np.isinf(user_vec_np).any()}")
+                print(f"DEBUG: user_vec min/max: {np.min(user_vec_np):.6f} / {np.max(user_vec_np):.6f}")
 
             # Store user vector for each impression in the batch
             for i, imp_id in enumerate(impression_ids):
-                user_vecs_dict[int(imp_id)] = user_vec[i].numpy()
+                user_vecs_dict[int(imp_id)] = user_vec_np[i]
 
             progress.update(user_progress, advance=len(impression_ids))
 
@@ -122,10 +144,10 @@ class BaseModel(Model):
             _, labels, impression_id, cand_ids = impression
 
             # Get user vector for this impression
-            user_vector = user_vecs_dict[impression_id.numpy()[0]]
+            user_vector = user_vecs_dict[impression_id]
 
             # Get news vectors for candidate news
-            cand_ids_np = cand_ids.numpy()[0]  # Get numpy array of candidate IDs
+            cand_ids_np = ops.convert_to_numpy(cand_ids)  # Get numpy array of candidate IDs
             news_vectors = []
             for nid in cand_ids_np:
                 news_key = f"N{str(nid)}"
@@ -137,14 +159,30 @@ class BaseModel(Model):
             if not news_vectors:
                 scores = np.array([])
             else:
-                scores = np.dot(np.stack(news_vectors, axis=0), user_vector)
+                news_vectors_array = np.stack(news_vectors, axis=0)
+                
+                # Debug: Check for NaN/Inf in user_vector and news_vectors
+                if np.isnan(user_vector).any() or np.isinf(user_vector).any():
+                    print(f"DEBUG: user_vector has NaN/Inf: {np.isnan(user_vector).any()}/{np.isinf(user_vector).any()}")
+                    print(f"DEBUG: user_vector min/max: {np.min(user_vector):.6f} / {np.max(user_vector):.6f}")
+                
+                if np.isnan(news_vectors_array).any() or np.isinf(news_vectors_array).any():
+                    print(f"DEBUG: news_vectors has NaN/Inf: {np.isnan(news_vectors_array).any()}/{np.isinf(news_vectors_array).any()}")
+                    print(f"DEBUG: news_vectors min/max: {np.min(news_vectors_array):.6f} / {np.max(news_vectors_array):.6f}")
+                
+                scores = np.dot(news_vectors_array, user_vector)
+                
+                # Debug: Check final scores
+                if np.isnan(scores).any() or np.isinf(scores).any():
+                    print(f"DEBUG: Final scores has NaN/Inf: {np.isnan(scores).any()}/{np.isinf(scores).any()}")
+                    print(f"DEBUG: Final scores min/max: {np.min(scores):.6f} / {np.max(scores):.6f}")
 
-            group_labels_list.append(labels.numpy())
+            group_labels_list.append(ops.convert_to_numpy(labels))
             group_preds_list.append(scores)
 
             if save_predictions_path:
-                predictions_to_save[str(cand_ids.numpy())] = (
-                    labels.numpy().tolist(),
+                predictions_to_save[str(ops.convert_to_numpy(cand_ids))] = (
+                    ops.convert_to_numpy(labels).tolist(),
                     scores.tolist(),
                 )
 
@@ -209,14 +247,21 @@ class BaseModel(Model):
                 continue
 
             # For loss calculation, convert to tensors
-            labels_tf = tf.constant([labels_np], dtype=self.float_dtype)
-            scores_tf_logits = tf.constant([scores_np], dtype=self.float_dtype)
-            scores_tf_probs = tf.nn.softmax(scores_tf_logits, axis=-1)
+            labels_tensor = ops.convert_to_tensor([labels_np], dtype=self.float_dtype)
+            scores_logits_tensor = ops.convert_to_tensor([scores_np], dtype=self.float_dtype)
+            scores_probs_tensor = ops.softmax(scores_logits_tensor, axis=-1)
 
             try:
-                loss = self.compute_loss(y=labels_tf, y_pred=scores_tf_probs, training=False)
+                # Use compiled loss function for consistency with training
+                if hasattr(self, 'compiled_loss') and self.compiled_loss is not None:
+                    loss = self.compiled_loss(labels_tensor, scores_probs_tensor)
+                else:
+                    # Fallback to categorical crossentropy if no compiled loss
+                    loss = ops.categorical_crossentropy(labels_tensor, scores_probs_tensor, from_logits=False)
+                    loss = ops.mean(loss)
+                    
                 if loss is not None:
-                    val_loss_total += loss.numpy()
+                    val_loss_total += ops.convert_to_numpy(loss)
                     num_valid_impressions_for_loss += 1
             except Exception as e:
                 progress.console.print(f"[WARNING fast_evaluate] Error calculating loss: {e}.")

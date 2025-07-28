@@ -2,28 +2,28 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
-import tensorflow as tf
+import keras
 from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import Progress
 
-from .metrics import NewsRecommenderMetrics
-from .saving import save_predictions_to_file_fn, get_output_run_dir
-from .engine import test_step_fn
-from .logging import log_metrics_to_console_fn
+from src.utils.metrics.functions import NewsRecommenderMetrics
+from ..io.saving import save_predictions_to_file_fn, get_output_run_dir
+from ..training.engine import test_step_fn
+from ..io.logging import log_metrics_to_console_fn
 
 console = Console()
 
 
 def run_evaluation_epoch(
-    model: tf.keras.Model,
-    eval_dataloader: tf.data.Dataset,
-    custom_metrics_calculator: NewsRecommenderMetrics,
-    num_total_impressions: int,
-    progress: Progress,
-    mode: str = "val",  # "val" or "test"
-    save_predictions_dir: Optional[Path] = None,
-    epoch_idx: Optional[int] = None,  # 0-indexed
+        model: keras.Model,
+        eval_dataloader,
+        custom_metrics_calculator: NewsRecommenderMetrics,
+        num_total_impressions: int,
+        progress: Progress,
+        mode: str = "val",  # "val" or "test"
+        save_predictions_dir: Optional[Path] = None,
+        epoch_idx: Optional[int] = None,  # 0-indexed
 ) -> Dict[str, float]:
     """
     Run validation or testing for one epoch (non-fast evaluation).
@@ -31,7 +31,7 @@ def run_evaluation_epoch(
     It iterates through the dataloader, calls `test_step_fn`.
     """
     eval_progress_task = progress.add_task(
-        f"Running {mode} (epoch {epoch_idx+1 if epoch_idx is not None else 'N/A'})...",
+        f"Running {mode} (epoch {epoch_idx + 1 if epoch_idx is not None else 'N/A'})...",
         total=num_total_impressions,
         visible=True,
     )
@@ -52,7 +52,7 @@ def run_evaluation_epoch(
         total_loss += step_results["loss"]
 
         # Get raw predictions from the model for custom metrics calculation
-        # The NRMS.call(training=False) should return scores for the slate.
+        # The model.call(training=False) should return scores for the slate.
         batch_raw_predictions = model(batch_features, training=False)
 
         all_labels_batched.append(batch_labels.numpy())
@@ -102,7 +102,7 @@ def run_evaluation_epoch(
     )
 
     final_eval_metrics = (
-        final_eval_metrics | custom_eval_metrics | {"num_impressions": processed_impressions_count}
+            final_eval_metrics | custom_eval_metrics | {"num_impressions": processed_impressions_count}
     )
 
     if save_predictions_dir:
@@ -118,8 +118,8 @@ def run_evaluation_epoch(
 
 
 def get_main_comparison_metric(
-    validation_metrics: Dict[str, float],
-    min_improvement: float = 0.01,  # Minimum improvement required to consider it better
+        validation_metrics: Dict[str, float],
+        min_improvement: float = 0.01,  # Minimum improvement required to consider it better
 ) -> Tuple[float, bool]:
     """Extracts the primary metric used for comparing epochs and checks if improvement is significant.
 
@@ -163,16 +163,13 @@ def get_main_comparison_metric(
 
 
 def _run_initial_validation(
-    model: tf.keras.Model,
-    dataset_provider: Any,
-    custom_metrics_engine: NewsRecommenderMetrics,
-    progress_bar_manager: Progress,
-    cfg: DictConfig,
+        model: keras.Model,
+        dataset_provider: Any,
+        custom_metrics_engine: NewsRecommenderMetrics,
+        progress_bar_manager: Progress,
+        cfg: DictConfig,
 ) -> Dict[str, float]:
     """Run initial validation before training starts."""
-    if not cfg.eval.run_initial_validation:
-        return {}
-
     console.log("[bold yellow]Running Initial Validation (before training starts)...[/bold yellow]")
 
     # Setup output directory based on Hydra's current run path
@@ -209,13 +206,13 @@ def _run_initial_validation(
 
 
 def _run_epoch_evaluation(
-    model: tf.keras.Model,
-    dataset_provider: Any,
-    custom_metrics_engine: NewsRecommenderMetrics,
-    progress_bar_manager: Progress,
-    cfg: DictConfig,
-    epoch_idx: int,
-    predictions_save_dir: Optional[Path] = None,
+        model: keras.Model,
+        dataset_provider: Any,
+        custom_metrics_engine: NewsRecommenderMetrics,
+        progress_bar_manager: Progress,
+        cfg: DictConfig,
+        epoch_idx: int,
+        predictions_save_dir: Optional[Path] = None,
 ) -> Dict[str, float]:
     """Run evaluation for a single epoch."""
     if cfg.eval.fast_evaluation:
@@ -253,15 +250,15 @@ def _run_epoch_evaluation(
 
 
 def _run_final_testing(
-    model: tf.keras.Model,
-    dataset_provider: Any,
-    custom_metrics_engine: NewsRecommenderMetrics,
-    progress_bar_manager: Progress,
-    cfg: DictConfig,
-    best_model_weights_filepath: Path,
-    last_model_weights_filepath: Path,
-    best_epoch_metrics_tracking: Dict[str, Any],
-    predictions_save_dir: Optional[Path] = None,
+        model: keras.Model,
+        dataset_provider: Any,
+        custom_metrics_engine: NewsRecommenderMetrics,
+        progress_bar_manager: Progress,
+        cfg: DictConfig,
+        best_model_weights_filepath: Path,
+        last_model_weights_filepath: Path,
+        best_epoch_metrics_tracking: Dict[str, Any],
+        predictions_save_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, float]]:
     """Run final testing phase after training."""
     console.log("Loading best model weights from")

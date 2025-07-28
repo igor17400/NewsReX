@@ -1,16 +1,16 @@
-from typing import Any, Optional
+import keras
 
-import tensorflow as tf
+from typing import Any
 
 
-class NewsRecommenderLoss(tf.keras.losses.Loss):
+class NewsRecommenderLoss(keras.losses.Loss):
     """Base class for news recommendation losses."""
 
     def __init__(
-        self,
-        name: str = "news_recommender_loss",
-        reduction: str = "sum_over_batch_size",
-        **kwargs: Any,
+            self,
+            name: str = "news_recommender_loss",
+            reduction: str = "sum_over_batch_size",
+            **kwargs: Any,
     ) -> None:
         super().__init__(name=name, reduction=reduction, **kwargs)
 
@@ -34,18 +34,18 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
     """
 
     def __init__(
-        self,
-        name: str = "categorical_crossentropy",
-        from_logits: bool = False,
-        reduction: str = "sum_over_batch_size",
-        label_smoothing: float = 0.0,
-        **kwargs: Any,
+            self,
+            name: str = "categorical_crossentropy",
+            from_logits: bool = False,
+            reduction: str = "sum_over_batch_size",
+            label_smoothing: float = 0.0,
+            **kwargs: Any,
     ) -> None:
         super().__init__(name=name, reduction=reduction, **kwargs)
         self.from_logits = from_logits
         self.label_smoothing = label_smoothing
 
-    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    def call(self, y_true: keras.KerasTensor, y_pred: keras.KerasTensor) -> keras.KerasTensor:
         """Compute the loss.
 
         Args:
@@ -55,7 +55,7 @@ class CategoricalCrossEntropyLoss(NewsRecommenderLoss):
         Returns:
             Loss value
         """
-        return tf.keras.losses.categorical_crossentropy(
+        return keras.losses.categorical_crossentropy(
             y_true, y_pred, from_logits=self.from_logits, label_smoothing=self.label_smoothing
         )
 
@@ -79,18 +79,18 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
     """
 
     def __init__(
-        self,
-        name: str = "binary_crossentropy",
-        from_logits: bool = False,
-        reduction: str = "sum_over_batch_size",
-        label_smoothing: float = 0.0,
-        **kwargs: Any,
+            self,
+            name: str = "binary_crossentropy",
+            from_logits: bool = False,
+            reduction: str = "sum_over_batch_size",
+            label_smoothing: float = 0.0,
+            **kwargs: Any,
     ) -> None:
         super().__init__(name=name, reduction=reduction, **kwargs)
         self.from_logits = from_logits
         self.label_smoothing = label_smoothing
 
-    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    def call(self, y_true: keras.KerasTensor, y_pred: keras.KerasTensor) -> keras.KerasTensor:
         """Compute the loss.
 
         Args:
@@ -100,7 +100,7 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
         Returns:
             Loss value
         """
-        return tf.keras.losses.binary_crossentropy(
+        return keras.losses.binary_crossentropy(
             y_true, y_pred, from_logits=self.from_logits, label_smoothing=self.label_smoothing
         )
 

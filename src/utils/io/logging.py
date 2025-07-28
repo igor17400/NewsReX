@@ -39,18 +39,16 @@ def setup_logging(level: str = "INFO") -> None:
         force=True,  # Override any existing configuration
     )
 
-    # Disable Hydra's logging
+    # Configure backend-specific logging
     logging.getLogger("hydra").setLevel(logging.WARNING)
-    # Set other loggers to INFO
-    logging.getLogger("tensorflow").setLevel(logging.INFO)
-
-    # Disable propagation for some loggers
     logging.getLogger("hydra").propagate = False
-
-    # Disable Hydra's logging
-    logging.getLogger("hydra").setLevel(logging.WARNING)
-    # Set other loggers to INFO
-    logging.getLogger("tensorflow").setLevel(logging.INFO)
+    
+    # JAX backend logging configuration
+    logging.getLogger("jax").setLevel(logging.WARNING)  # Reduce JAX compilation messages
+    logging.getLogger("jaxlib").setLevel(logging.WARNING)  # Reduce JAXlib messages
+    
+    # Keras 3 logging
+    logging.getLogger("keras").setLevel(logging.INFO)  # Show important Keras messages
 
 
 def setup_wandb_session(cfg: DictConfig) -> None:

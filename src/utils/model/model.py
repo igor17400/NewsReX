@@ -2,15 +2,15 @@ import inspect
 from typing import Any, Tuple
 
 import hydra
-import tensorflow as tf
+import keras
 from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
-from .losses import get_loss
+from ..training.losses import get_loss
 
 console = Console()
 
 
-def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
+def initialize_model_and_dataset(cfg: DictConfig, training_metrics: list = None) -> Tuple[keras.Model, Any]:
     """Instantiate dataset and model based on Hydra configuration."""
     console.log("Initializing dataset provider...")
     dataset_provider: Any = hydra.utils.instantiate(cfg.dataset, mode="train")
@@ -44,7 +44,7 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
     # Filter out any parameters that are not in the model's __init__ signature
     valid_params = {k: v for k, v in model_params.items() if k in model_signature.parameters}
 
-    model: tf.keras.Model = model_class(**valid_params)
+    model: keras.Model = model_class(**valid_params)
     # --- End Generic Model Instantiation ---
 
     console.log(f"Successfully instantiated {model.name} model.")
@@ -59,12 +59,12 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
     console.log(f"[bold cyan]Summary of {model.name} Model (main wrapper):[/bold cyan]")
     model.summary(print_fn=lambda s: console.log(s))
 
-    optimizer = tf.keras.optimizers.Adam(learning_rate=cfg.train.learning_rate)
+    optimizer = keras.optimizers.Adam(learning_rate=cfg.train.learning_rate)
     if (
         cfg.device.mixed_precision
-        and tf.keras.mixed_precision.global_policy().name == "mixed_float16"
+        and keras.mixed_precision.global_policy().name == "mixed_float16"
     ):
-        optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
+        optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     loss_function = get_loss(
         loss_name=cfg.model.loss.name,
@@ -73,12 +73,19 @@ def initialize_model_and_dataset(cfg: DictConfig) -> Tuple[tf.keras.Model, Any]:
         label_smoothing=cfg.model.loss.label_smoothing
     )
 
-    model.compile(optimizer=optimizer, loss=loss_function)
+    # Compile with metrics if provided
+    compile_kwargs = {"optimizer": optimizer, "loss": loss_function}
+    if training_metrics is not None:
+        compile_kwargs["metrics"] = training_metrics
+        
+    model.compile(**compile_kwargs)
+    
+    metrics_info = f", Metrics: {len(training_metrics)} metrics" if training_metrics else ""
     console.log(
-        f"Model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}"
+        f"Model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}{metrics_info}"
     )
 
-    console.log(f"Mixed precision global policy: {tf.keras.mixed_precision.global_policy().name}")
+    console.log(f"Mixed precision global policy: {keras.mixed_precision.global_policy().name}")
     console.log(f"Optimizer type: {type(optimizer)}")
 
     return model, dataset_provider

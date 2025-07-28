@@ -90,7 +90,7 @@ class AdditiveAttentionLayer(layers.Layer):
 
         # 4. Normalize attention weights
         attention_weights = attention / (
-            ops.sum(attention, axis=-1, keepdims=True) + keras.backend.epsilon()
+                ops.sum(attention, axis=-1, keepdims=True) + keras.backend.epsilon()
         )
 
         # 5. Compute weighted sum of inputs

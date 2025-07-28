@@ -2,10 +2,11 @@ import os
 
 import hydra
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+# Set JAX as Keras backend before importing keras
+os.environ["KERAS_BACKEND"] = "jax"
 
-import tensorflow as tf
-import numpy as np
+import keras
+
 from omegaconf import DictConfig, OmegaConf
 from rich.progress import (
     BarColumn,
@@ -17,23 +18,24 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from utils.metrics import NewsRecommenderMetrics
-from utils.saving import get_output_run_dir
-from utils.logging import setup_logging, console
-from utils.model import initialize_model_and_dataset
-from utils.orchestration import training_loop_orchestrator
-from utils.logging import setup_wandb_session
-from utils.device import setup_device
+from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.io.saving import get_output_run_dir
+from src.utils.io.logging import setup_logging, console
+from src.utils.model.model import initialize_model_and_dataset
+from src.utils.training.orchestration import training_loop_orchestrator
+from src.utils.metrics.wrapper import create_news_metrics, LightweightNewsMetrics
+from src.utils.io.logging import setup_wandb_session
+from src.utils.device.device import setup_device
 
 
-def setup_tensorflow_precision(use_mixed_precision: bool):
-    """Sets the global TensorFlow precision policy."""
+def setup_precision(use_mixed_precision: bool):
+    """Sets the global Keras precision policy."""
     if use_mixed_precision:
-        console.log("Setting TensorFlow mixed precision policy to 'mixed_float16'.")
-        policy = tf.keras.mixed_precision.Policy('mixed_float16')
-        tf.keras.mixed_precision.set_global_policy(policy)
+        console.log("Setting Keras mixed precision policy to 'mixed_float16'.")
+        policy = keras.mixed_precision.Policy('mixed_float16')
+        keras.mixed_precision.set_global_policy(policy)
     else:
-        console.log("Using TensorFlow default precision policy 'float32'.")
+        console.log("Using Keras default precision policy 'float32'.")
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -54,19 +56,29 @@ def main_training_entry(cfg: DictConfig) -> None:
     )
     # Determine precision from the boolean flag
     use_mixed = cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else False
-    
-    # Set global TensorFlow precision policy
-    setup_tensorflow_precision(use_mixed)
 
-    # Set random seeds
-    tf.random.set_seed(cfg.seed)
-    np.random.seed(cfg.seed)
+    # Set global Keras precision policy
+    setup_precision(use_mixed)
+
+    # Set random seeds for all backends (Keras 3 handles backend-specific seeding)
+    keras.utils.set_random_seed(cfg.seed)
 
     # Initialize WandB
     setup_wandb_session(cfg)
 
-    # Model and Dataset Initialization
-    model, dataset_provider = initialize_model_and_dataset(cfg)
+    # Prepare training metrics
+    if LightweightNewsMetrics.should_use_lightweight_metrics(cfg):
+        # Use lightweight metrics during training, custom metrics in callbacks
+        training_metrics = LightweightNewsMetrics.create_training_metrics()
+        console.log("Using lightweight metrics during training with custom metrics in callbacks")
+    else:
+        # Use full custom metrics during training (slower but more comprehensive)
+        training_metrics = create_news_metrics(
+            NewsRecommenderMetrics(**cfg.metrics.params if hasattr(cfg.metrics, "params") else {}))
+        console.log("Using full custom metrics during training")
+
+    # Model and Dataset Initialization (includes compilation with metrics)
+    model, dataset_provider = initialize_model_and_dataset(cfg, training_metrics)
 
     # Metrics Calculator
     metrics_engine = NewsRecommenderMetrics(
@@ -80,16 +92,16 @@ def main_training_entry(cfg: DictConfig) -> None:
 
     # Rich Progress Bar context manager
     with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=None),
-        TaskProgressColumn(),
-        TextColumn("({task.completed} of {task.total} batches)"),
-        TimeElapsedColumn(),
-        TextColumn("|"),
-        TimeRemainingColumn(),
-        console=console,
-        transient=False,
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(bar_width=None),
+            TaskProgressColumn(),
+            TextColumn("({task.completed} of {task.total} batches)"),
+            TimeElapsedColumn(),
+            TextColumn("|"),
+            TimeRemainingColumn(),
+            console=console,
+            transient=False,
     ) as global_progress_bar:
 
         training_loop_orchestrator(

@@ -14,6 +14,17 @@ validation_split_strategy: "random" # Options: chronological, random
 validation_split_percentage: 0.05
 validation_split_seed: 42
 
+# Data sampling fractions
+data_fraction_train: 1.0
+data_fraction_val: 1.0
+data_fraction_test: 1.0
+
+# Dataset mode
+mode: "train"
+
+# Word threshold for vocabulary
+word_threshold: 5
+
 # Dataset URLs
 urls:
   small:
@@ -32,6 +43,8 @@ max_impressions_length: 5
 
 # Knowledge graph configuration
 use_knowledge_graph: false # Enable/disable knowledge graph processing
+max_entities: 100
+max_relations: 50
 
 # Pass sampling configuration directly
 sampling: ${sampling}
@@ -41,3 +54,4 @@ process_title: false
 process_abstract: false
 process_category: false
 process_subcategory: false
+process_user_id: false
