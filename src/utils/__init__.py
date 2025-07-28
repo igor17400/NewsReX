@@ -1,5 +1,5 @@
 """
-BTC (Behind The Curtains) News Recommendation Framework Utilities
+NewsRex - News Recommendation Framework Utilities
 
 This module provides organized utilities for the news recommendation system,
 structured by functionality for better maintainability and discoverability.

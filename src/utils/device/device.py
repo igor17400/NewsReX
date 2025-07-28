@@ -1,7 +1,6 @@
 import os
 
 import jax
-import keras
 
 from typing import List
 from src.utils.io.logging import console
@@ -24,10 +23,23 @@ def setup_device(gpu_ids: List[int], memory_limit: float = 0.9) -> None:
     try:
         # Configure JAX for GPU usage
         devices = jax.devices()
-        gpu_devices = [d for d in devices if d.device_kind == 'gpu']
+        
+        # Check for CUDA/GPU devices using multiple methods for robustness
+        gpu_devices = []
+        for d in devices:
+            # Method 1: Check device type string (most reliable for CudaDevice)
+            if 'cuda' in str(type(d)).lower():
+                gpu_devices.append(d)
+            # Method 2: Check device_kind attribute if it exists
+            elif hasattr(d, 'device_kind') and d.device_kind in ['cuda', 'gpu']:
+                gpu_devices.append(d)
+            # Method 3: Check platform attribute if it exists
+            elif hasattr(d, 'platform') and d.platform in ['cuda', 'gpu']:
+                gpu_devices.append(d)
 
         if not gpu_devices:
             console.log("⚠️ No GPU found. Using CPU instead.")
+            console.log(f"Available devices: {[str(d) for d in devices]}")
             os.environ["JAX_PLATFORM_NAME"] = "cpu"
             return
 

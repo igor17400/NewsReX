@@ -5,28 +5,27 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
 from rich.console import Console
-import datetime
+import hydra
 
 console = Console()
 
 
 def get_output_run_dir(cfg):
     """
-    Returns the output directory for the current run, creating it if necessary.
-    Structure: <output_base_dir>/<model_name>/<YYYY-MM-DD-HH-MM-SS>/
+    Returns the output directory for the current run.
+    Uses Hydra's working directory to avoid duplicate folder structures.
     """
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    experiment_name = cfg.name.lower()
-    output_run_dir = Path(cfg.output_base_dir) / experiment_name / f"{timestamp}"
+    # Get Hydra's current working directory
+    output_run_dir = Path(hydra.core.hydra_config.HydraConfig.get().runtime.output_dir)
     output_run_dir.mkdir(parents=True, exist_ok=True)
     return output_run_dir
 
 
 def save_predictions_to_file_fn(
-    predictions_dict: Dict[str, Tuple[List, List]],
-    output_dir: Path,
-    epoch_idx: Optional[int] = None,
-    mode: str = "val",
+        predictions_dict: Dict[str, Tuple[List, List]],
+        output_dir: Path,
+        epoch_idx: Optional[int] = None,
+        mode: str = "val",
 ) -> None:
     console = Console()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -46,12 +45,12 @@ def save_predictions_to_file_fn(
 
 
 def save_run_summary_fn(
-    summary_output_dir: Path,
-    hydra_cfg: DictConfig,
-    initial_metrics_dict: Dict[str, float],
-    best_metrics_summary_dict: Dict[str, Any],
-    test_metrics_dict: Optional[Dict[str, float]] = None,
-    wandb_full_history: Optional[Dict[str, List[float]]] = None,
+        summary_output_dir: Path,
+        hydra_cfg: DictConfig,
+        initial_metrics_dict: Dict[str, float],
+        best_metrics_summary_dict: Dict[str, Any],
+        test_metrics_dict: Optional[Dict[str, float]] = None,
+        wandb_full_history: Optional[Dict[str, List[float]]] = None,
 ) -> None:
     """Saves training config, key metrics, and history to a JSON file."""
     data_to_save = {

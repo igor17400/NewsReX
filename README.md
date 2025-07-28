@@ -1,10 +1,10 @@
-# BTC: Behind The Curtains for Recommender Systems
+# NewsRex: Behind The Curtains for Recommender Systems
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-BTC is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. The framework has been optimized with **Keras 3 + JAX backend** for enhanced performance through JIT compilation and XLA acceleration. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
+NewsRex is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. The framework has been optimized with **Keras 3 + JAX backend** for enhanced performance through JIT compilation and XLA acceleration. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
 
 ## 🌟 Features
 
@@ -46,11 +46,11 @@ BTC is a modular and extensible framework for news recommendation systems resear
 2.  **Create and activate a Conda environment** with Python 3.11:
 
     ```bash
-    conda create -n btc_env python=3.11 -y
-    conda activate btc_env
+    conda create -n nrex_env python=3.11 -y
+    conda activate nrex_env
     ```
 
-3.  **Install Poetry** (Python package manager) within your `btc_env`:
+3.  **Install Poetry** (Python package manager) within your `nrex_env`:
 
     ```bash
     conda install poetry -y
@@ -69,11 +69,11 @@ BTC is a modular and extensible framework for news recommendation systems resear
 1.  **Clone the repository:**
 
     ```bash
-    git clone [https://github.com/igor17400/BTC.git](https://github.com/igor17400/BTC.git)
-    cd BTC
+    git clone [https://github.com/igor17400/NewsRex.git](https://github.com/igor17400/NewsRex.git)
+    cd NewsRex
     ```
 
-2.  **Point Poetry to your `btc_env` Conda environment:**
+2.  **Point Poetry to your `nrex_env` Conda environment:**
     This step ensures Poetry uses your existing Python 3.11 environment.
 
     ```bash
@@ -88,13 +88,13 @@ BTC is a modular and extensible framework for news recommendation systems resear
     Virtualenv
     Python:          3.11.13
     Implementation: CPython
-    Path:           /root/miniconda3/envs/btc_env  # Or your specific conda env path
-    Executable:     /root/miniconda3/envs/btc_env/bin/python
+    Path:           /root/miniconda3/envs/nrex_env  # Or your specific conda env path
+    Executable:     /root/miniconda3/envs/nrex_env/bin/python
     Valid:          True
     ```
 
 3.  **Install project dependencies:**
-    Poetry will now install the project's dependencies into your `btc_env`.
+    Poetry will now install the project's dependencies into your `nrex_env`.
 
     ```bash
     poetry install 
@@ -117,7 +117,7 @@ BTC is a modular and extensible framework for news recommendation systems resear
     Test if JAX is properly using your GPU:
 
     ```bash
-    python ./src/tests/test_jax_gpu.py
+    python ./src/tests/jax_gpu.py
     ```
 
     *Expected output (example for GPU detected):*

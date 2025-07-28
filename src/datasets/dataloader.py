@@ -1,6 +1,6 @@
 import keras
 
-from typing import List, Any, Iterator, Tuple, Dict, Optional, Union
+from typing import Any, Iterator, Tuple, Dict, Optional
 import numpy as np
 
 
@@ -29,6 +29,7 @@ class TrainingSequence(keras.utils.Sequence):
             batch_size: Batch size for training
             model_name: Name of the model (for input name mapping)
         """
+        super().__init__()
         self.features = features
         self.labels = labels
         self.batch_size = batch_size
@@ -38,35 +39,6 @@ class TrainingSequence(keras.utils.Sequence):
         # Create indices for shuffling
         self.indices = np.arange(self.num_samples)
         self.on_epoch_end()
-
-        # Define model-specific input name mappings
-        self._setup_input_mappings()
-
-    def _setup_input_mappings(self):
-        """Setup input name mappings for different models."""
-        self.input_mappings = {
-            "nrms": {
-                "hist_tokens": "history_tokens_train",
-                "cand_tokens": "candidate_tokens_train"
-            },
-            "naml": {
-                "hist_tokens": "history_tokens_train",
-                "cand_tokens": "candidate_tokens_train",
-                # NAML might need additional mappings based on its input layers
-                "hist_abstract_tokens": "history_abstract_train",
-                "cand_abstract_tokens": "candidate_abstract_train",
-                "hist_category": "history_category_train",
-                "cand_category": "candidate_category_train",
-                "hist_subcategory": "history_subcategory_train",
-                "cand_subcategory": "candidate_subcategory_train"
-            },
-            "lstur": {
-                "hist_tokens": "history_tokens_train",
-                "cand_tokens": "candidate_tokens_train",
-                "user_ids": "user_ids_train",
-                # LSTUR concatenates features, so it might need different mapping
-            }
-        }
 
     def __len__(self) -> int:
         """Return number of batches per epoch."""
@@ -86,14 +58,10 @@ class TrainingSequence(keras.utils.Sequence):
         end_idx = min((index + 1) * self.batch_size, self.num_samples)
         batch_indices = self.indices[start_idx:end_idx]
 
-        # Get batch features with proper input names
+        # Get batch features
         batch_features = {}
-        mapping = self.input_mappings.get(self.model_name, {})
-
         for feature_name, feature_data in self.features.items():
-            # Map to model-specific input name
-            input_name = mapping.get(feature_name, feature_name)
-            batch_features[input_name] = feature_data[batch_indices]
+            batch_features[feature_name] = feature_data[batch_indices]
 
         # Get batch labels
         batch_labels = self.labels[batch_indices]
@@ -125,7 +93,6 @@ class NewsDataLoader:
             user_ids: keras.KerasTensor,
             labels: keras.KerasTensor,
             batch_size: int,
-            buffer_size: int = 10000,  # Kept for API compatibility
             process_title: bool = True,
             process_abstract: bool = True,
             process_category: bool = True,
@@ -150,7 +117,6 @@ class NewsDataLoader:
             user_ids: User IDs
             labels: Training labels
             batch_size: Batch size
-            buffer_size: Buffer size (unused, kept for compatibility)
             process_title: Whether to include title features
             process_abstract: Whether to include abstract features
             process_category: Whether to include category features

@@ -6,19 +6,8 @@ from rich.console import Console
 console = Console()
 
 
-def train_step_fn(
-    model: keras.Model, data: Tuple[Dict[str, keras.KerasTensor], keras.KerasTensor]
-) -> Dict[str, keras.KerasTensor]:
-    """Custom training step logic. Expects data as (features_dict, labels_tensor)."""
-    features, labels = data
-
-    # Use Keras 3's backend-agnostic training step
-    batch_metrics = model.train_on_batch(features, labels, return_dict=True)
-    return batch_metrics
-
-
 def test_step_fn(
-    model: keras.Model, data: Tuple[Dict[str, keras.KerasTensor], keras.KerasTensor]
+        model: keras.Model, data: Tuple[Dict[str, keras.KerasTensor], keras.KerasTensor]
 ) -> Dict[str, keras.KerasTensor]:
     """Custom test step logic."""
     features, labels = data

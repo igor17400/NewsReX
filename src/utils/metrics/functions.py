@@ -1,6 +1,8 @@
 import keras
 import jax
 import jax.numpy as jnp
+import numpy as np
+from sklearn.metrics import roc_auc_score
 
 import logging
 from functools import partial
@@ -16,8 +18,8 @@ class NewsRecommenderMetrics:
 
     def __init__(self):
         """Initialize the JAX-optimized metrics calculator."""
-        # JIT compile all metric functions for maximum performance
-        self._compute_auc_jax = jax.jit(self._compute_auc_impl)
+        # JIT compile metric functions for maximum performance (except AUC which uses sklearn)
+        self._compute_auc_jax = self._compute_auc_impl  # No JIT for sklearn function
         self._compute_mrr_jax = jax.jit(self._compute_mrr_impl)
         self._compute_ndcg_jax = jax.jit(self._compute_ndcg_impl, static_argnames=['k'])
         self._dcg_score_jax = jax.jit(self._dcg_score_impl, static_argnames=['k'])
@@ -43,7 +45,9 @@ class NewsRecommenderMetrics:
             return self._compute_metrics_single(y_true, y_pred_logits)
 
         # Batch processing using vectorized JAX operations
-        auc_scores = jax.vmap(self._compute_auc_jax)(y_true, y_pred_logits)
+        # AUC uses sklearn so we compute it separately without vmap
+        auc_scores = jnp.array([self._compute_auc_jax(y_true[i], y_pred_logits[i])
+                                for i in range(len(y_true))])
         mrr_scores = jax.vmap(self._compute_mrr_jax)(y_true, y_pred_logits)
         ndcg5_scores = jax.vmap(partial(self._compute_ndcg_jax, k=5))(y_true, y_pred_logits)
         ndcg10_scores = jax.vmap(partial(self._compute_ndcg_jax, k=10))(y_true, y_pred_logits)
@@ -84,25 +88,17 @@ class NewsRecommenderMetrics:
         }
 
     def _compute_auc_impl(self, y_true, y_pred):
-        """JAX implementation of AUC calculation."""
-        # Simple AUC implementation using ranking
-        n_pos = jnp.sum(y_true)
-        n_neg = jnp.sum(1 - y_true)
+        """JAX implementation of AUC calculation using sklearn."""
+        # Convert to numpy for sklearn
+        y_true_np = np.array(y_true)
+        y_pred_np = np.array(y_pred)
 
-        # Handle edge cases
-        def compute_auc():
-            # Get indices sorted by prediction scores (descending)
-            sorted_indices = jnp.argsort(-y_pred)
-            y_true_sorted = y_true[sorted_indices]
-
-            # Count inversions (positive examples ranked after negative examples)
-            pos_ranks = jnp.cumsum(y_true_sorted)
-            neg_count_before = jnp.arange(len(y_true_sorted)) + 1 - pos_ranks
-            auc_sum = jnp.sum(y_true_sorted * neg_count_before)
-
-            return auc_sum / (n_pos * n_neg)
-
-        return jnp.where((n_pos > 0) & (n_neg > 0), compute_auc(), 0.5)
+        try:
+            auc = roc_auc_score(y_true_np, y_pred_np)
+            return jnp.array(auc)
+        except ValueError:
+            # Only one class present, return 0.5
+            return jnp.array(0.5)
 
     def _compute_mrr_impl(self, y_true, y_score):
         """JAX implementation of Mean Reciprocal Rank."""

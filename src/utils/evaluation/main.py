@@ -52,7 +52,7 @@ def run_evaluation_epoch(
         total_loss += step_results["loss"]
 
         # Get raw predictions from the model for custom metrics calculation
-        # The NRMS.call(training=False) should return scores for the slate.
+        # The model.call(training=False) should return scores for the slate.
         batch_raw_predictions = model(batch_features, training=False)
 
         all_labels_batched.append(batch_labels.numpy())

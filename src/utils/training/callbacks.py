@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.progress import Progress
 
 from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.evaluation import run_evaluation_epoch
 from ..io.logging import log_metrics_to_console_fn, log_metrics_to_wandb_fn
 
 console = Console()
@@ -173,8 +174,6 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
         if self.cfg.eval.fast_evaluation:
             return
 
-        from .evaluation import run_evaluation_epoch
-
         # Create mode-specific directory for predictions
         mode_specific_dir = self.predictions_save_dir / "val" if self.predictions_save_dir else None
         if mode_specific_dir:
@@ -274,12 +273,14 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
 class RichProgressCallback(keras.callbacks.Callback):
     """Keras callback to integrate with Rich progress bars."""
 
-    def __init__(self, progress_manager: Progress, num_epochs: int):
+    def __init__(self, progress_manager: Progress, num_epochs: int, steps_per_epoch: Optional[int] = None):
         super().__init__()
         self.progress_manager = progress_manager
         self.num_epochs = num_epochs
+        self.steps_per_epoch = steps_per_epoch
         self.overall_task = None
         self.epoch_task = None
+        self.current_epoch = 0
 
     def on_train_begin(self, logs=None):
         """Initialize overall progress tracking."""
@@ -290,13 +291,10 @@ class RichProgressCallback(keras.callbacks.Callback):
 
     def on_epoch_begin(self, epoch, logs=None):
         """Initialize epoch progress tracking."""
-        if hasattr(self.model, 'train_dataset') and hasattr(self.model.train_dataset, '__len__'):
-            try:
-                total_steps = len(self.model.train_dataset)
-            except:
-                total_steps = None
-        else:
-            total_steps = None
+        self.current_epoch = epoch
+        
+        # Use the provided steps_per_epoch if available
+        total_steps = self.steps_per_epoch
 
         self.epoch_task = self.progress_manager.add_task(
             f"Epoch {epoch + 1}/{self.num_epochs}",
@@ -311,7 +309,7 @@ class RichProgressCallback(keras.callbacks.Callback):
             self.progress_manager.update(
                 self.epoch_task,
                 advance=1,
-                description=f"Epoch {self.model._epoch + 1}/{self.num_epochs} (Loss: {loss:.4f})"
+                description=f"Epoch {self.current_epoch + 1}/{self.num_epochs} (Loss: {loss:.4f})"
             )
 
     def on_epoch_end(self, epoch, logs=None):

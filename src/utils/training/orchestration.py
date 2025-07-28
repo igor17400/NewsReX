@@ -86,8 +86,16 @@ def training_loop_orchestrator(
     # Setup callbacks
     callbacks = []
 
+    # Calculate steps per epoch
+    steps_per_epoch = None
+    if hasattr(train_dataset, '__len__'):
+        try:
+            steps_per_epoch = len(train_dataset)
+        except:
+            steps_per_epoch = None
+
     # Add Rich progress callback
-    progress_callback = RichProgressCallback(progress_bar_manager, cfg.train.num_epochs)
+    progress_callback = RichProgressCallback(progress_bar_manager, cfg.train.num_epochs, steps_per_epoch)
     callbacks.append(progress_callback)
 
     # Add evaluation callback (fast or slow)
@@ -145,7 +153,7 @@ def training_loop_orchestrator(
     console.log("[bold]Starting Keras 3 model.fit() training...[/bold]")
 
     try:
-        history = model.fit(
+        model.fit(
             train_dataset,
             epochs=cfg.train.num_epochs,
             callbacks=callbacks,

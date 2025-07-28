@@ -51,7 +51,7 @@ def main():
     # Check JAX GPU availability first
     print("\n🔍 Checking JAX GPU availability...")
     gpu_result = subprocess.run(
-        [sys.executable, str(Path(__file__).parent / "test_jax_gpu.py")],
+        [sys.executable, str(Path(__file__).parent / "jax_gpu.py")],
         capture_output=True,
         text=True
     )

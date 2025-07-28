@@ -52,7 +52,9 @@ class BaseModel(keras.Model):
 
             if self.newsencoder is None:
                 raise RuntimeError("News Encoder not initialized. Ensure the model is properly built.")
-            batch_vecs = ops.convert_to_numpy(self.newsencoder(news_features, training=False))
+            batch_vecs = ops.convert_to_numpy(
+                self.newsencoder(news_features, training=False)
+            )
             
             # Debug: Check for NaN/Inf in news vectors
             if np.isnan(batch_vecs).any() or np.isinf(batch_vecs).any():
@@ -250,7 +252,14 @@ class BaseModel(keras.Model):
             scores_probs_tensor = ops.softmax(scores_logits_tensor, axis=-1)
 
             try:
-                loss = self.compute_loss(y=labels_tensor, y_pred=scores_probs_tensor, training=False)
+                # Use compiled loss function for consistency with training
+                if hasattr(self, 'compiled_loss') and self.compiled_loss is not None:
+                    loss = self.compiled_loss(labels_tensor, scores_probs_tensor)
+                else:
+                    # Fallback to categorical crossentropy if no compiled loss
+                    loss = ops.categorical_crossentropy(labels_tensor, scores_probs_tensor, from_logits=False)
+                    loss = ops.mean(loss)
+                    
                 if loss is not None:
                     val_loss_total += ops.convert_to_numpy(loss)
                     num_valid_impressions_for_loss += 1
