@@ -198,32 +198,53 @@ class NRMSScorer(keras.Model):
         # Apply sigmoid for probability
         return layers.Activation("sigmoid", name="sigmoid_activation")(score)
 
-    def score_multiple_candidates(self, history_tokens, candidate_tokens, training=None):
-        """Score multiple candidates with raw scores for fast evaluation."""
-        user_repr = self.user_encoder(history_tokens, training=training)
-
-        batch_size = ops.shape(candidate_tokens)[0]
+    def score_multiple_candidates(self, history_tokens, candidate_tokens, training=False):
+        """Score multiple candidates using scorer model for consistency.
+        
+        This method processes each candidate individually through the scorer model
+        to maintain architectural consistency and ensure sigmoid activation is applied.
+        
+        Args:
+            history_tokens: User history tokens, shape (batch_size, history_len, title_len)
+            candidate_tokens: Candidate tokens, shape (batch_size, num_candidates, title_len)
+            training: Whether in training mode
+            
+        Returns:
+            Scores with sigmoid activation applied, shape (batch_size, num_candidates)
+        """
+        batch_size = ops.shape(history_tokens)[0]
         num_candidates = ops.shape(candidate_tokens)[1]
 
-        # Reshape candidates for batch processing
-        candidates_flat = ops.reshape(
-            candidate_tokens, (batch_size * num_candidates, self.config.max_title_length)
-        )
+        all_scores = []
 
-        # Get candidate representations
-        candidate_repr_flat = self.news_encoder(candidates_flat, training=training)
+        # Process each item in the batch
+        for i in range(batch_size):
+            # Get history for current item
+            current_history = ops.expand_dims(
+                history_tokens[i], 0
+            )  # Shape: (1, history_len, title_len)
 
-        # Reshape back to batch format
-        candidate_repr = ops.reshape(
-            candidate_repr_flat, (batch_size, num_candidates, self.config.embedding_size)
-        )
+            # Score each candidate against this history
+            candidate_scores = []
+            for j in range(num_candidates):
+                current_candidate = ops.expand_dims(
+                    candidate_tokens[i, j], 0
+                )  # Shape: (1, title_len)
 
-        # Compute scores using optimized matrix operations
-        user_expanded = ops.expand_dims(user_repr, axis=1)
-        similarity = candidate_repr * user_expanded
-        scores = ops.sum(similarity, axis=-1)
+                # Use scorer model which includes sigmoid activation
+                score = self.score_single_candidate(
+                    current_history, current_candidate, training=training
+                )
+                candidate_scores.append(score)
 
-        return scores
+            # Combine scores for all candidates of this item
+            item_scores = ops.concatenate(
+                candidate_scores, axis=1
+            )  # Shape: (1, num_candidates)
+            all_scores.append(item_scores)
+
+        # Combine scores for all items in batch
+        return ops.concatenate(all_scores, axis=0)  # Shape: (batch_size, num_candidates)
 
 
 class NRMS(BaseModel):
@@ -277,6 +298,19 @@ class NRMS(BaseModel):
         self.userencoder = self.user_encoder
         self.process_user_id = process_user_id
         self.float_dtype = "float32"
+
+    def build(self, input_shape):
+        """Build the NRMS model.
+        
+        This method is called automatically by Keras to build the model layers.
+        Since our components are already created in __init__, we just need to
+        call the parent build method.
+        
+        Args:
+            input_shape: Input shape (can be None for models with multiple inputs)
+        """
+        # Mark this layer as built
+        super().build(input_shape)
 
     def _validate_processed_news(self) -> None:
         """Validate processed news data integrity."""
@@ -385,7 +419,6 @@ class NRMS(BaseModel):
             valid_combinations = [
                 {"hist_tokens", "cand_tokens"},  # Training format for validation
                 {"history_tokens", "single_candidate_tokens"},  # Single candidate scoring
-                {"history_tokens", "candidate_tokens"},  # Multiple candidate scoring
             ]
 
             if not any(combination.issubset(input_keys) for combination in valid_combinations):
@@ -414,12 +447,9 @@ class NRMS(BaseModel):
         else:
             # Inference mode: route based on input format
             if "single_candidate_tokens" in inputs:
-                return self._handle_single_candidate(inputs, training)
+                return self._handle_single_candidate(inputs)
             elif "hist_tokens" in inputs and "cand_tokens" in inputs:
-                # Training format used during validation
-                return self._handle_training(inputs, training)
-            elif "history_tokens" in inputs and "candidate_tokens" in inputs:
-                return self._handle_multiple_candidates(inputs, training)
+                return self._handle_multiple_candidates(inputs)
             else:
                 raise ValueError("Invalid input format for inference mode")
 
@@ -439,14 +469,13 @@ class NRMS(BaseModel):
             inputs["history_tokens"], inputs["single_candidate_tokens"], training=training
         )
 
-    def _handle_multiple_candidates(self, inputs, training=None):
-        """Handle multiple candidate scoring with raw scores."""
-        # Check if using legacy format with 'cand_tokens' or new format with 'candidate_tokens'
+    def _handle_multiple_candidates(self, inputs):
+        """Handle multiple candidate scoring with sigmoid scores."""
         candidates_key = "cand_tokens"
         history_key = "hist_tokens"
 
         return self.scorer.score_multiple_candidates(
-            inputs[history_key], inputs[candidates_key], training=training
+            inputs[history_key], inputs[candidates_key], training=False
         )
 
     def get_config(self):

@@ -101,30 +101,37 @@ class NewsRecommenderMetrics:
             return jnp.array(0.5)
 
     def _compute_mrr_impl(self, y_true, y_score):
-        """JAX implementation of Mean Reciprocal Rank."""
+        """JAX implementation of Mean Reciprocal Rank.
+        
+        MRR = sum(relevance_i / rank_i) / sum(relevance_i)
+        This follows the MIND dataset evaluation convention.
+        """
         # Sort indices in descending order of scores
-        order = jnp.argsort(-y_score)
+        order = jnp.argsort(y_score)[::-1]
         y_true_sorted = y_true[order]
 
         # Calculate reciprocal ranks
-        ranks = jnp.arange(1, len(y_true_sorted) + 1)
-        rr_scores = y_true_sorted / ranks
-
-        # Return MRR
-        n_relevant = jnp.sum(y_true)
-        return jnp.where(n_relevant > 0, jnp.sum(rr_scores) / n_relevant, 0.0)
+        rr_scores = y_true_sorted / (jnp.arange(len(y_true_sorted)) + 1)
+        
+        # Return MRR following MIND convention: sum(rr_scores) / sum(y_true)
+        return jnp.where(jnp.sum(y_true) > 0, jnp.sum(rr_scores) / jnp.sum(y_true), 0.0)
 
     def _dcg_score_impl(self, y_true, y_score, k):
-        """JAX implementation of Discounted Cumulative Gain (DCG)@k."""
-        k = min(k, len(y_true))
-
-        # Sort by score in descending order and take top k
-        order = jnp.argsort(-y_score)
+        """JAX implementation of Discounted Cumulative Gain (DCG)@k.
+        
+        DCG@k = sum_{i=1}^k (2^rel_i - 1) / log2(i + 1)
+        where rel_i is the relevance of item at rank i.
+        """
+        # Sort by score in descending order
+        order = jnp.argsort(y_score)[::-1]
         y_true_sorted = y_true[order[:k]]
 
-        # Calculate DCG
-        gains = jnp.power(2.0, y_true_sorted) - 1.0
-        discounts = jnp.log2(jnp.arange(2, k + 2))
+        # Calculate gains: 2^relevance - 1
+        gains = jnp.power(2, y_true_sorted) - 1
+        
+        # Calculate discounts: log2(rank + 1) where rank starts from 1
+        # For position i (0-indexed), the rank is i+1, so discount is log2(i+2)
+        discounts = jnp.log2(jnp.arange(len(y_true_sorted)) + 2)
 
         return jnp.sum(gains / discounts)
 
