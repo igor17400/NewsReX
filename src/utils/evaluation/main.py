@@ -265,51 +265,11 @@ def _run_final_testing(
 ) -> Optional[Dict[str, float]]:
     """Run final testing phase after training."""
     console.log("[bold]Loading best model for final testing...[/bold]")
-    
-    # Try to load model configuration if available
-    try:
-        saved_config_dict = load_model_config(best_model_weights_filepath)
-        
-        # Verify compatibility
-        if verify_model_compatibility(saved_config_dict, best_model_weights_filepath):
-            # Create a new model with the saved configuration
-            saved_cfg = OmegaConf.create(saved_config_dict)
-            console.log("[yellow]Creating model with saved configuration to ensure architecture match...[/yellow]")
-            
-            # Initialize model with saved configuration
-            model_for_testing, _ = initialize_model_and_dataset(saved_cfg, training_metrics=None)
-            
-            # Build the model by calling it with dummy data
-            console.log("Building model with dummy data...")
-            max_history = getattr(saved_cfg.dataset, 'max_history_length', 50)
-            max_title = getattr(saved_cfg.dataset, 'max_title_length', 32)
-            max_impressions = getattr(saved_cfg.dataset, 'max_impressions_length', 5)
-            
-            dummy_history = ops.zeros((1, max_history, max_title), dtype="int32")
-            dummy_candidates = ops.zeros((1, max_impressions, max_title), dtype="int32")
-            _ = model_for_testing({"hist_tokens": dummy_history, "cand_tokens": dummy_candidates}, training=False)
-            
-            # Load weights into the correctly configured model
-            console.log(f"Loading weights from '{best_model_weights_filepath}'...")
-            model_for_testing.load_weights(best_model_weights_filepath)
-            console.log("[green]Model recreated with correct architecture and weights loaded successfully![/green]")
-            
-            # Use the correctly configured model for testing
-            model = model_for_testing
-        else:
-            console.log("[red]Model configuration verification failed, using current model[/red]")
-            model.load_weights(best_model_weights_filepath)
-            
-    except FileNotFoundError:
-        console.log("[yellow]No saved configuration found, using current model configuration[/yellow]")
-        console.log("[yellow]This may cause issues if the model architecture has changed![/yellow]")
-        model.load_weights(best_model_weights_filepath)
-    except Exception as e:
-        console.log(f"[red]Error loading model configuration: {e}[/red]")
-        console.log("[yellow]Falling back to loading weights into current model[/yellow]")
-        model.load_weights(best_model_weights_filepath)
 
-    # Load test data only when needed
+    # Loading weights from the model
+    model.load_weights(best_model_weights_filepath)
+
+    # Load test data
     console.log("Loading test data for final evaluation...")
     dataset_provider._load_data(mode="test")
 

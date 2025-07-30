@@ -19,8 +19,8 @@ class BaseModel(keras.Model):
         super().__init__(name=name)
         
         # Attributes to be set by subclasses
-        self.newsencoder: Optional[keras.Model] = None
-        self.userencoder: Optional[keras.Model] = None 
+        self.news_encoder: Optional[keras.Model] = None
+        self.user_encoder: Optional[keras.Model] = None 
         self.process_user_id: bool = False
         self.float_dtype: str = "float32"  # Will be set by training config
 
@@ -50,10 +50,10 @@ class BaseModel(keras.Model):
             news_ids = batch["news_id"]
             news_features = batch["news_features"]
 
-            if self.newsencoder is None:
+            if self.news_encoder is None:
                 raise RuntimeError("News Encoder not initialized. Ensure the model is properly built.")
             batch_vecs = ops.convert_to_numpy(
-                self.newsencoder(news_features, training=False)
+                self.news_encoder(news_features, training=False)
             )
             
             # Debug: Check for NaN/Inf in news vectors
@@ -86,15 +86,15 @@ class BaseModel(keras.Model):
             "Computing user vectors...", total=len(user_dataloader), visible=True
         )
 
-        if self.userencoder is None:
+        if self.user_encoder is None:
             raise RuntimeError("User Encoder not initialized. Ensure the model is properly built.")
 
         for impression_ids, user_ids, features in user_dataloader:
             # Get user representation from history
             if self.process_user_id: # Used for LSTUR model
-                user_vec = self.userencoder([features, user_ids], training=False)
+                user_vec = self.user_encoder([features, user_ids], training=False)
             else:
-                user_vec = self.userencoder(features, training=False)
+                user_vec = self.user_encoder(features, training=False)
             
             # Debug: Check for NaN/Inf in user vectors
             user_vec_np = ops.convert_to_numpy(user_vec)

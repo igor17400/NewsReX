@@ -36,6 +36,22 @@ class NewsEncoder(keras.Model):
         self.config = config
         self.embedding_layer = embedding_layer
 
+        # Create layers as instance attributes so they're tracked
+        self.dropout1 = layers.Dropout(self.config.dropout_rate, seed=self.config.seed, name="embedding_dropout")
+        self.multi_head_attention = layers.MultiHeadAttention(
+            num_heads=self.config.multiheads,
+            key_dim=self.config.head_dim,
+            dropout=self.config.dropout_rate,
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
+            name="title_word_self_attention",
+        )
+        self.dropout2 = layers.Dropout(self.config.dropout_rate, seed=self.config.seed, name="attention_dropout")
+        self.additive_attention = AdditiveAttentionLayer(
+            query_vec_dim=self.config.attention_hidden_dim,
+            seed=self.config.seed,
+            name="title_additive_attention",
+        )
+
     def build(self, input_shape):
         super().build(input_shape)
 
@@ -64,29 +80,25 @@ class NewsEncoder(keras.Model):
         embedded_sequences = self.embedding_layer(inputs)
 
         # Dropout after embedding
-        y = layers.Dropout(self.config.dropout_rate, seed=self.config.seed)(embedded_sequences, training=training)
+        y = self.dropout1(embedded_sequences, training=training)
 
-        # Create padding mask for attention
+        # Create padding mask for attention (2D: batch_size, seq_len)
         padding_mask = ops.not_equal(inputs, 0)
 
         # Multi-Head Self-Attention over words
-        y = layers.MultiHeadAttention(
-            num_heads=self.config.multiheads,
-            key_dim=self.config.head_dim,
-            dropout=self.config.dropout_rate,
-            kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
-            name="title_word_self_attention",
-        )(y, y, y, key_mask=padding_mask, training=training)
+        # Note: For self-attention, we only need the key/value mask, not attention_mask
+        y = self.multi_head_attention(
+            y, y, y,
+            key_mask=padding_mask,
+            value_mask=padding_mask,
+            training=training
+        )
 
         # Apply dropout after self-attention
-        y = layers.Dropout(self.config.dropout_rate, seed=self.config.seed)(y, training=training)
+        y = self.dropout2(y, training=training)
 
         # Additive Attention to get single news vector
-        news_representation = AdditiveAttentionLayer(
-            query_vec_dim=self.config.attention_hidden_dim,
-            seed=self.config.seed,
-            name="title_additive_attention",
-        )(y, mask=padding_mask)
+        news_representation = self.additive_attention(y, mask=padding_mask)
 
         return news_representation
 
@@ -102,6 +114,23 @@ class UserEncoder(keras.Model):
         super().__init__(name=name)
         self.config = config
         self.news_encoder = news_encoder
+
+        # Create layers as instance attributes so they're tracked
+        self.time_distributed = layers.TimeDistributed(
+            self.news_encoder, name="time_distributed_news_encoder"
+        )
+        self.browsed_news_attention = layers.MultiHeadAttention(
+            num_heads=self.config.multiheads,
+            key_dim=self.config.head_dim,
+            dropout=self.config.dropout_rate,
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
+            name="browsed_news_self_attention",
+        )
+        self.user_additive_attention = AdditiveAttentionLayer(
+            query_vec_dim=self.config.attention_hidden_dim,
+            seed=self.config.seed,
+            name="user_additive_attention",
+        )
 
     def build(self, input_shape):
         super().build(input_shape)
@@ -128,29 +157,22 @@ class UserEncoder(keras.Model):
             User representations (batch_size, embedding_size)
         """
         # Apply news encoder to each news item in history
-        click_title_presents = layers.TimeDistributed(
-            self.news_encoder, name="time_distributed_news_encoder"
-        )(inputs, training=training)
+        click_title_presents = self.time_distributed(inputs, training=training)
 
-        # Create mask for history items
+        # Create mask for history items (2D: batch_size, history_len)
         history_mask = ops.any(ops.not_equal(inputs, 0), axis=-1)
 
         # Self-Attention over browsed news
-        y = layers.MultiHeadAttention(
-            num_heads=self.config.multiheads,
-            key_dim=self.config.head_dim,
-            dropout=self.config.dropout_rate,
-            kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
-            name="browsed_news_self_attention",
-        )(click_title_presents, click_title_presents, click_title_presents,
-          key_mask=history_mask, training=training)
+        # Note: For self-attention, we only need the key/value mask, not attention_mask
+        y = self.browsed_news_attention(
+            click_title_presents, click_title_presents, click_title_presents,
+            key_mask=history_mask,
+            value_mask=history_mask,
+            training=training
+        )
 
         # Additive Attention to get single user vector
-        user_representation = AdditiveAttentionLayer(
-            query_vec_dim=self.config.attention_hidden_dim,
-            seed=self.config.seed,
-            name="user_additive_attention",
-        )(y, mask=history_mask)
+        user_representation = self.user_additive_attention(y, mask=history_mask)
 
         return user_representation
 
@@ -169,6 +191,11 @@ class NRMSScorer(keras.Model):
         self.news_encoder = news_encoder
         self.user_encoder = user_encoder
 
+        # Store TimeDistributed layer for candidate processing
+        self.candidate_encoder = layers.TimeDistributed(
+            self.news_encoder, name="td_candidate_news_encoder"
+        )
+
     def build(self, input_shape):
         super().build(input_shape)
 
@@ -176,10 +203,8 @@ class NRMSScorer(keras.Model):
         """Score training batch with softmax output."""
         user_repr = self.user_encoder(history_tokens, training=training)
 
-        # Process candidates using TimeDistributed
-        candidate_repr = layers.TimeDistributed(
-            self.news_encoder, name="td_candidate_news_encoder"
-        )(candidate_tokens, training=training)
+        # Process candidates using stored TimeDistributed layer
+        candidate_repr = self.candidate_encoder(candidate_tokens, training=training)
 
         # Calculate scores using dot product
         scores = layers.Dot(axes=-1, name="dot_product_train")([candidate_repr, user_repr])
@@ -199,10 +224,10 @@ class NRMSScorer(keras.Model):
         return layers.Activation("sigmoid", name="sigmoid_activation")(score)
 
     def score_multiple_candidates(self, history_tokens, candidate_tokens, training=False):
-        """Score multiple candidates using scorer model for consistency.
+        """Score multiple candidates using vectorized operations.
         
-        This method processes each candidate individually through the scorer model
-        to maintain architectural consistency and ensure sigmoid activation is applied.
+        This method efficiently processes all candidates using vectorized operations
+        and applies sigmoid activation to maintain consistency with single candidate scoring.
         
         Args:
             history_tokens: User history tokens, shape (batch_size, history_len, title_len)
@@ -212,39 +237,21 @@ class NRMSScorer(keras.Model):
         Returns:
             Scores with sigmoid activation applied, shape (batch_size, num_candidates)
         """
-        batch_size = ops.shape(history_tokens)[0]
-        num_candidates = ops.shape(candidate_tokens)[1]
+        # Get user representations for all items in batch
+        user_repr = self.user_encoder(history_tokens, training=training)  # (batch_size, embedding_dim)
 
-        all_scores = []
+        # Process all candidates using TimeDistributed layer
+        candidate_repr = self.candidate_encoder(candidate_tokens,
+                                                training=training)  # (batch_size, num_candidates, embedding_dim)
 
-        # Process each item in the batch
-        for i in range(batch_size):
-            # Get history for current item
-            current_history = ops.expand_dims(
-                history_tokens[i], 0
-            )  # Shape: (1, history_len, title_len)
+        # Vectorized dot product: expand user_repr to match candidate dimensions
+        user_repr_expanded = ops.expand_dims(user_repr, axis=1)  # (batch_size, 1, embedding_dim)
 
-            # Score each candidate against this history
-            candidate_scores = []
-            for j in range(num_candidates):
-                current_candidate = ops.expand_dims(
-                    candidate_tokens[i, j], 0
-                )  # Shape: (1, title_len)
+        # Calculate scores using vectorized dot product
+        scores = ops.sum(candidate_repr * user_repr_expanded, axis=-1)  # (batch_size, num_candidates)
 
-                # Use scorer model which includes sigmoid activation
-                score = self.score_single_candidate(
-                    current_history, current_candidate, training=training
-                )
-                candidate_scores.append(score)
-
-            # Combine scores for all candidates of this item
-            item_scores = ops.concatenate(
-                candidate_scores, axis=1
-            )  # Shape: (1, num_candidates)
-            all_scores.append(item_scores)
-
-        # Combine scores for all items in batch
-        return ops.concatenate(all_scores, axis=0)  # Shape: (batch_size, num_candidates)
+        # Apply sigmoid activation for consistency with single candidate scoring
+        return ops.sigmoid(scores)
 
 
 class NRMS(BaseModel):
@@ -293,24 +300,9 @@ class NRMS(BaseModel):
         # Initialize components
         self._create_components()
 
-        # Set BaseModel attributes for fast evaluation
-        self.newsencoder = self.news_encoder
-        self.userencoder = self.user_encoder
+        # Set BaseModel attributes for fast evaluation (required by BaseModel)
         self.process_user_id = process_user_id
         self.float_dtype = "float32"
-
-    def build(self, input_shape):
-        """Build the NRMS model.
-        
-        This method is called automatically by Keras to build the model layers.
-        Since our components are already created in __init__, we just need to
-        call the parent build method.
-        
-        Args:
-            input_shape: Input shape (can be None for models with multiple inputs)
-        """
-        # Mark this layer as built
-        super().build(input_shape)
 
     def _validate_processed_news(self) -> None:
         """Validate processed news data integrity."""

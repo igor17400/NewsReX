@@ -49,20 +49,10 @@ def initialize_model_and_dataset(cfg: DictConfig, training_metrics: list = None)
 
     console.log(f"Successfully instantiated {model.name} model.")
 
-    if hasattr(model, "training_model") and model.training_model is not None:
-        console.log(f"[bold cyan]Summary of {model.name} Training Model (internal):[/bold cyan]")
-        model.training_model.summary(print_fn=lambda s: console.log(s))
-    if hasattr(model, "scorer_model") and model.scorer_model is not None:
-        console.log(f"[bold cyan]Summary of {model.name} Scorer Model (internal):[/bold cyan]")
-        model.scorer_model.summary(print_fn=lambda s: console.log(s))
-
-    console.log(f"[bold cyan]Summary of {model.name} Model (main wrapper):[/bold cyan]")
-    model.summary(print_fn=lambda s: console.log(s))
-
     optimizer = keras.optimizers.Adam(learning_rate=cfg.train.learning_rate)
     if (
-        cfg.device.mixed_precision
-        and keras.mixed_precision.global_policy().name == "mixed_float16"
+            cfg.device.mixed_precision
+            and keras.mixed_precision.global_policy().name == "mixed_float16"
     ):
         optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
@@ -77,9 +67,9 @@ def initialize_model_and_dataset(cfg: DictConfig, training_metrics: list = None)
     compile_kwargs = {"optimizer": optimizer, "loss": loss_function}
     if training_metrics is not None:
         compile_kwargs["metrics"] = training_metrics
-        
+
     model.compile(**compile_kwargs)
-    
+
     metrics_info = f", Metrics: {len(training_metrics)} metrics" if training_metrics else ""
     console.log(
         f"Model compiled. Optimizer: {type(optimizer).__name__}, Loss: {loss_function.name}{metrics_info}"

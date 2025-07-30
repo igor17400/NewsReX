@@ -72,6 +72,17 @@ def training_loop_orchestrator(
             wandb_history,
         )
 
+    # Model Summary
+    if hasattr(model, "training_model") and model.training_model is not None:
+        console.log(f"[bold cyan]Summary of {model.name} Training Model (internal):[/bold cyan]")
+        model.training_model.summary(print_fn=lambda s: console.log(s))
+    if hasattr(model, "scorer_model") and model.scorer_model is not None:
+        console.log(f"[bold cyan]Summary of {model.name} Scorer Model (internal):[/bold cyan]")
+        model.scorer_model.summary(print_fn=lambda s: console.log(s))
+
+    console.log(f"[bold cyan]Summary of {model.name} Model (main wrapper):[/bold cyan]")
+    model.summary(print_fn=lambda s: console.log(s))
+
     # Prepare training and validation datasets
     console.log("[bold]Preparing datasets for Keras 3 training...[/bold]")
 
