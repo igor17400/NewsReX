@@ -10,6 +10,7 @@ from rich.progress import Progress
 from src.utils.metrics.functions import NewsRecommenderMetrics
 from src.utils.evaluation import run_evaluation_epoch
 from ..io.logging import log_metrics_to_console_fn, log_metrics_to_wandb_fn
+from ..io.model_config import save_model_config
 
 console = Console()
 
@@ -82,6 +83,8 @@ class FastEvaluationCallback(keras.callbacks.Callback):
             # Save best model weights
             if hasattr(self, 'best_model_path'):
                 self.model.save_weights(str(self.best_model_path))
+                # Save model configuration alongside weights
+                save_model_config(self.cfg, self.best_model_path)
         else:
             self.wait += 1
 
@@ -210,6 +213,8 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
             # Save best model weights
             if hasattr(self, 'best_model_path'):
                 self.model.save_weights(str(self.best_model_path))
+                # Save model configuration alongside weights
+                save_model_config(self.cfg, self.best_model_path)
         else:
             self.wait += 1
 
@@ -292,7 +297,7 @@ class RichProgressCallback(keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         """Initialize epoch progress tracking."""
         self.current_epoch = epoch
-        
+
         # Use the provided steps_per_epoch if available
         total_steps = self.steps_per_epoch
 
