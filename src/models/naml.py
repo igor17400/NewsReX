@@ -334,12 +334,12 @@ class NewsEncoder(keras.Model):
         """Compute the output shape of the news encoder.
         
         Args:
-            input_shape: Input shape dict with keys: title_tokens, abstract_tokens, category_id, subcategory_id
+            input_shape: Tuple representing concatenated input shape
             
         Returns:
             Output shape (batch_size, cnn_filter_num)
         """
-        return (input_shape["title_tokens"][0], self.config.cnn_filter_num)
+        return (input_shape[0], self.config.cnn_filter_num)
 
     def call(self, inputs, training=None):
         """Forward pass for news encoding.
@@ -354,8 +354,10 @@ class NewsEncoder(keras.Model):
         """
         # Split the concatenated input: [title, abstract, category, subcategory]
         title_tokens = inputs[:, :self.config.max_title_length]
-        abstract_tokens = inputs[:, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
-        category_id = inputs[:, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
+        abstract_tokens = inputs[
+            :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
+        category_id = inputs[
+            :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
         subcategory_id = inputs[:, self.config.max_title_length + self.config.max_abstract_length + 1:]
 
         # Encode each view
@@ -385,6 +387,11 @@ class UserEncoder(keras.Model):
         self.config = config
         self.news_encoder = news_encoder
 
+        # TimeDistributed layer for processing history
+        self.time_distributed = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_user"
+        )
+
         # User-level attention
         self.user_attention = AdditiveAttentionLayer(
             self.config.user_attention_query_dim,
@@ -399,12 +406,12 @@ class UserEncoder(keras.Model):
         """Compute the output shape of the user encoder.
         
         Args:
-            input_shape: Input shape dict with history of news items
+            input_shape: Tuple representing concatenated input shape
             
         Returns:
             Output shape (batch_size, cnn_filter_num)
         """
-        return (input_shape["title_tokens"][0], self.config.cnn_filter_num)
+        return (input_shape[0], self.config.cnn_filter_num)
 
     def call(self, inputs, training=None):
         """Forward pass for user encoding.
@@ -417,34 +424,13 @@ class UserEncoder(keras.Model):
         Returns:
             User representations (batch_size, cnn_filter_num)
         """
-        batch_size = ops.shape(inputs)[0]
-        history_length = ops.shape(inputs)[1]
-        
-        # Split the concatenated input: [title, abstract, category, subcategory]
+        # Process all history items using TimeDistributed layer
+        news_vectors = self.time_distributed(inputs, training=training)
+        # Result: (batch_size, history_length, cnn_filter_num)
+
+        # Create mask for valid history items by checking title tokens
+        # Extract title tokens from the concatenated input to create the mask
         title_tokens = inputs[:, :, :self.config.max_title_length]
-        abstract_tokens = inputs[:, :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
-        category_id = inputs[:, :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
-        subcategory_id = inputs[:, :, self.config.max_title_length + self.config.max_abstract_length + 1:]
-
-        # Reshape inputs to process all history items at once
-        title_tokens_flat = ops.reshape(title_tokens, (-1, self.config.max_title_length))
-        abstract_tokens_flat = ops.reshape(abstract_tokens, (-1, self.config.max_abstract_length))
-        category_id_flat = ops.reshape(category_id, (-1, 1))
-        subcategory_id_flat = ops.reshape(subcategory_id, (-1, 1))
-
-        # Process all history items through news encoder using concatenated format
-        news_input_flat = ops.concatenate([
-            title_tokens_flat,
-            abstract_tokens_flat, 
-            category_id_flat,
-            subcategory_id_flat
-        ], axis=-1)
-        news_vectors_flat = self.news_encoder(news_input_flat, training=training)
-
-        # Reshape back to (batch_size, history_length, cnn_filter_num)
-        news_vectors = ops.reshape(news_vectors_flat, (batch_size, history_length, self.config.cnn_filter_num))
-
-        # Create mask for valid history items
         history_mask = ops.any(ops.not_equal(title_tokens, 0), axis=-1)
 
         # Apply user-level attention
@@ -467,48 +453,59 @@ class NAMLScorer(keras.Model):
         self.news_encoder = news_encoder
         self.user_encoder = user_encoder
 
+        # Store TimeDistributed layers for candidate processing
+        self.candidate_encoder_train = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_candidates"
+        )
+        self.candidate_encoder_eval = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_eval"
+        )
+
     def build(self, input_shape):
         super().build(input_shape)
 
     def score_training_batch(self, history_inputs, candidate_inputs, training=None):
-        """Score training batch with softmax output."""
-        # Get user representation
+        """Score training batch with softmax output.
+        
+        Args:
+            history_inputs: Concatenated history tensor (batch_size, history_length, feature_size)
+            candidate_inputs: Concatenated candidates tensor (batch_size, num_candidates, feature_size)
+            training: Whether in training mode
+            
+        Returns:
+            Softmax scores (batch_size, num_candidates)
+        """
+        # Get user representation from concatenated history
         user_repr = self.user_encoder(history_inputs, training=training)
 
-        # Process candidates using TimeDistributed-like approach
-        # Instead of reshaping, we'll process each candidate position separately
-        batch_size = ops.shape(candidate_inputs["title_tokens"])[0]
-        num_candidates = ops.shape(candidate_inputs["title_tokens"])[1]
+        # Get representations for all candidates using stored TimeDistributed layer
+        candidate_reprs = self.candidate_encoder_train(candidate_inputs, training=training)
+        # Result: (batch_size, num_candidates, cnn_filter_num)
 
-        candidate_scores = []
-        for i in range(self.config.max_impressions_length):  # Use fixed loop over max_impressions_length
-            # Extract single candidate for all batches
-            single_cand_inputs = {
-                "title_tokens": candidate_inputs["title_tokens"][:, i, :],
-                "abstract_tokens": candidate_inputs["abstract_tokens"][:, i, :],
-                "category_id": candidate_inputs["category_id"][:, i, :],
-                "subcategory_id": candidate_inputs["subcategory_id"][:, i, :],
-            }
+        # Expand user representation for broadcasting
+        user_repr_expanded = ops.expand_dims(user_repr, axis=1)  # (batch_size, 1, cnn_filter_num)
 
-            # Get representation for this candidate
-            cand_repr = self.news_encoder(single_cand_inputs, training=training)
-
-            # Compute score with user representation
-            score = ops.sum(cand_repr * user_repr, axis=-1, keepdims=True)
-            candidate_scores.append(score)
-
-        # Stack scores
-        scores = ops.concatenate(candidate_scores, axis=-1)
+        # Calculate scores using dot product
+        scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)  # (batch_size, num_candidates)
 
         # Apply softmax for training
         return ops.softmax(scores, axis=-1)
 
     def score_single_candidate(self, history_inputs, candidate_inputs, training=None):
-        """Score single candidate with sigmoid output."""
-        # Get user representation
+        """Score single candidate with sigmoid output.
+        
+        Args:
+            history_inputs: Concatenated history tensor (batch_size, history_length, feature_size)
+            candidate_inputs: Concatenated candidate tensor (batch_size, feature_size)
+            training: Whether in training mode
+            
+        Returns:
+            Sigmoid scores (batch_size, 1)
+        """
+        # Get user representation from concatenated history
         user_repr = self.user_encoder(history_inputs, training=training)
 
-        # Get candidate representation
+        # Get candidate representation from concatenated input
         candidate_repr = self.news_encoder(candidate_inputs, training=training)
 
         # Calculate score using dot product
@@ -520,31 +517,26 @@ class NAMLScorer(keras.Model):
     def score_multiple_candidates(self, history_inputs, candidate_inputs, training=False):
         """Score multiple candidates with sigmoid activation.
         
-        This method efficiently processes all candidates using vectorized operations
-        and applies sigmoid activation to maintain consistency with single candidate scoring.
+        Args:
+            history_inputs: Concatenated history tensor (batch_size, history_length, feature_size)
+            candidate_inputs: Concatenated candidates tensor (batch_size, num_candidates, feature_size)
+            training: Whether in training mode
+            
+        Returns:
+            Sigmoid scores (batch_size, num_candidates)
         """
-        # Get user representation
+        # Get user representation from concatenated history
         user_repr = self.user_encoder(history_inputs, training=training)
 
-        # Process candidates
-        batch_size = ops.shape(candidate_inputs["title_tokens"])[0]
-        num_candidates = ops.shape(candidate_inputs["title_tokens"])[1]
+        # Get representations for all candidates using stored TimeDistributed layer
+        candidate_reprs = self.candidate_encoder_eval(candidate_inputs, training=training)
+        # Result: (batch_size, num_candidates, cnn_filter_num)
 
-        # Reshape candidates to process all at once
-        cand_inputs_flat = {
-            "title_tokens": ops.reshape(candidate_inputs["title_tokens"], (-1, self.config.max_title_length)),
-            "abstract_tokens": ops.reshape(candidate_inputs["abstract_tokens"], (-1, self.config.max_abstract_length)),
-            "category_id": ops.reshape(candidate_inputs["category_id"], (-1, 1)),
-            "subcategory_id": ops.reshape(candidate_inputs["subcategory_id"], (-1, 1)),
-        }
-
-        # Get candidate representations
-        candidate_repr_flat = self.news_encoder(cand_inputs_flat, training=training)
-        candidate_repr = ops.reshape(candidate_repr_flat, (batch_size, num_candidates, self.config.cnn_filter_num))
+        # Expand user representation for broadcasting
+        user_repr_expanded = ops.expand_dims(user_repr, axis=1)
 
         # Calculate scores using dot product
-        user_repr_expanded = ops.expand_dims(user_repr, axis=1)
-        scores = ops.sum(candidate_repr * user_repr_expanded, axis=-1)
+        scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)
 
         # Apply sigmoid activation for consistency with single candidate scoring
         return ops.sigmoid(scores)
@@ -695,38 +687,8 @@ class NAML(BaseModel):
             dtype="int32", name="cand_concat_input"
         )
 
-        # Split the concatenated inputs
-        hist_title = history_concat_input[:, :, :self.config.max_title_length]
-        hist_abstract = history_concat_input[
-            :, :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
-        hist_category = history_concat_input[
-            :, :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
-        hist_subcategory = history_concat_input[
-            :, :, self.config.max_title_length + self.config.max_abstract_length + 1:]
-
-        cand_title = candidate_concat_input[:, :, :self.config.max_title_length]
-        cand_abstract = candidate_concat_input[
-            :, :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
-        cand_category = candidate_concat_input[
-            :, :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
-        cand_subcategory = candidate_concat_input[
-            :, :, self.config.max_title_length + self.config.max_abstract_length + 1:]
-
-        history_inputs = {
-            "title_tokens": hist_title,
-            "abstract_tokens": hist_abstract,
-            "category_id": hist_category,
-            "subcategory_id": hist_subcategory,
-        }
-
-        candidate_inputs = {
-            "title_tokens": cand_title,
-            "abstract_tokens": cand_abstract,
-            "category_id": cand_category,
-            "subcategory_id": cand_subcategory,
-        }
-
-        training_output = self.scorer.score_training_batch(history_inputs, candidate_inputs)
+        # Pass concatenated inputs directly to the scorer
+        training_output = self.scorer.score_training_batch(history_concat_input, candidate_concat_input)
 
         training_model = keras.Model(
             inputs=[history_concat_input, candidate_concat_input],
@@ -745,43 +707,8 @@ class NAML(BaseModel):
             dtype="int32", name="score_cand_concat_input"
         )
 
-        # Split history input
-        score_hist_title = score_history_concat_input[:, :, :self.config.max_title_length]
-        score_hist_abstract = score_history_concat_input[
-            :, :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
-        score_hist_category = score_history_concat_input[
-            :, :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
-        score_hist_subcategory = score_history_concat_input[
-            :, :, self.config.max_title_length + self.config.max_abstract_length + 1:]
-
-        # Split candidate input
-        score_cand_title = score_candidate_concat_input[:, :self.config.max_title_length]
-        score_cand_abstract = score_candidate_concat_input[
-            :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
-        score_cand_category = score_candidate_concat_input[
-            :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
-        score_cand_subcategory = score_candidate_concat_input[
-            :, self.config.max_title_length + self.config.max_abstract_length + 1:]
-
-        # Reshape category/subcategory to remove the last dimension
-        score_cand_category = ops.squeeze(score_cand_category, axis=-1)
-        score_cand_subcategory = ops.squeeze(score_cand_subcategory, axis=-1)
-
-        score_history_inputs = {
-            "title_tokens": score_hist_title,
-            "abstract_tokens": score_hist_abstract,
-            "category_id": score_hist_category,
-            "subcategory_id": score_hist_subcategory,
-        }
-
-        score_candidate_inputs = {
-            "title_tokens": score_cand_title,
-            "abstract_tokens": score_cand_abstract,
-            "category_id": ops.expand_dims(score_cand_category, axis=-1),
-            "subcategory_id": ops.expand_dims(score_cand_subcategory, axis=-1),
-        }
-
-        scorer_output = self.scorer.score_single_candidate(score_history_inputs, score_candidate_inputs)
+        # Pass concatenated inputs directly to the scorer
+        scorer_output = self.scorer.score_single_candidate(score_history_concat_input, score_candidate_concat_input)
 
         scorer_model = keras.Model(
             inputs=[score_history_concat_input, score_candidate_concat_input],
@@ -853,43 +780,43 @@ class NAML(BaseModel):
 
     def _handle_training(self, inputs):
         """Handle training batch scoring with softmax output."""
-        # Prepare history inputs
-        history_inputs = {
-            "title_tokens": inputs["hist_tokens"],
-            "abstract_tokens": inputs["hist_abstract_tokens"],
-            "category_id": ops.expand_dims(inputs["hist_category"], axis=-1),
-            "subcategory_id": ops.expand_dims(inputs["hist_subcategory"], axis=-1),
-        }
+        # Concatenate history inputs
+        history_concat = ops.concatenate([
+            inputs["hist_tokens"],
+            inputs["hist_abstract_tokens"],
+            ops.expand_dims(inputs["hist_category"], axis=-1),
+            ops.expand_dims(inputs["hist_subcategory"], axis=-1),
+        ], axis=-1)
 
-        # Prepare candidate inputs
-        candidate_inputs = {
-            "title_tokens": inputs["cand_tokens"],
-            "abstract_tokens": inputs["cand_abstract_tokens"],
-            "category_id": ops.expand_dims(inputs["cand_category"], axis=-1),
-            "subcategory_id": ops.expand_dims(inputs["cand_subcategory"], axis=-1),
-        }
+        # Concatenate candidate inputs
+        candidate_concat = ops.concatenate([
+            inputs["cand_tokens"],
+            inputs["cand_abstract_tokens"],
+            ops.expand_dims(inputs["cand_category"], axis=-1),
+            ops.expand_dims(inputs["cand_subcategory"], axis=-1),
+        ], axis=-1)
 
-        return self.scorer.score_training_batch(history_inputs, candidate_inputs, training=True)
+        return self.scorer.score_training_batch(history_concat, candidate_concat, training=True)
 
     def _handle_multiple_candidates(self, inputs):
         """Handle multiple candidate scoring with sigmoid scores."""
-        # Prepare history inputs
-        history_inputs = {
-            "title_tokens": inputs["hist_tokens"],
-            "abstract_tokens": inputs["hist_abstract_tokens"],
-            "category_id": ops.expand_dims(inputs["hist_category"], axis=-1),
-            "subcategory_id": ops.expand_dims(inputs["hist_subcategory"], axis=-1),
-        }
+        # Concatenate history inputs
+        history_concat = ops.concatenate([
+            inputs["hist_tokens"],
+            inputs["hist_abstract_tokens"],
+            ops.expand_dims(inputs["hist_category"], axis=-1),
+            ops.expand_dims(inputs["hist_subcategory"], axis=-1),
+        ], axis=-1)
 
-        # Prepare candidate inputs
-        candidate_inputs = {
-            "title_tokens": inputs["cand_tokens"],
-            "abstract_tokens": inputs["cand_abstract_tokens"],
-            "category_id": ops.expand_dims(inputs["cand_category"], axis=-1),
-            "subcategory_id": ops.expand_dims(inputs["cand_subcategory"], axis=-1),
-        }
+        # Concatenate candidate inputs
+        candidate_concat = ops.concatenate([
+            inputs["cand_tokens"],
+            inputs["cand_abstract_tokens"],
+            ops.expand_dims(inputs["cand_category"], axis=-1),
+            ops.expand_dims(inputs["cand_subcategory"], axis=-1),
+        ], axis=-1)
 
-        return self.scorer.score_multiple_candidates(history_inputs, candidate_inputs, training=False)
+        return self.scorer.score_multiple_candidates(history_concat, candidate_concat, training=False)
 
     def get_config(self):
         """Returns the configuration of the NAML model for serialization."""
