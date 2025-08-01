@@ -33,17 +33,17 @@ dataset:
 # Model specific
 model:
   embedding_size: 300
-  user_embedding_dim: 400
-  cnn_filter_num: 400
-  cnn_kernel_size: 3
   category_embedding_dim: 100
   subcategory_embedding_dim: 100
-  attention_hidden_dim: 200
-  dropout_rate: 0.2
+  cnn_filter_num: 300
+  cnn_kernel_size: 3
   cnn_activation: "relu"
+  attention_hidden_dim: 200
+  gru_unit: 300
+  type: "ini" # User encoder type: "ini" (initial state) or "con" (concatenation)
+  dropout_rate: 0.2
   num_users: 94057 # Total number of users in the datasets (train + validation + test)
-  user_representation_type: "gru" # Options: "lstm" or "gru"
-  user_combination_type: "ini" # Options: "ini" or "con"
+  process_user_id: true # LSTUR uses user ids for user embedding layer computation
   loss:
     name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
     from_logits: false # Whether the model outputs logits or probabilities
@@ -52,7 +52,7 @@ model:
 
 # Training parameters
 train:
-  batch_size: 256
+  batch_size: 16
   num_epochs: 10
   learning_rate: 0.0001
   early_stopping:
@@ -62,7 +62,7 @@ train:
 # Logging
 logging:
   enable_wandb: true
-  project_name: "BTC"
+  project_name: "NewsReX"
   experiment_name: lstur_mind_small_bs${train.batch_size}
   log_every_n_steps: 100
 

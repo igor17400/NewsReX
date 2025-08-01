@@ -1,745 +1,834 @@
 from typing import Tuple, Dict, Any, Optional
+from dataclasses import dataclass
+import numpy as np
 
 import keras
-from keras import layers
+from keras import layers, ops
 
 from .layers import AdditiveAttentionLayer, ComputeMasking, OverwriteMasking
 from .base import BaseModel
 
 
-class NewsInputSplitter(keras.layers.Layer):
-    """Splits a concatenated news input into its components (title, category, subcategory)."""
-
-    def __init__(self, title_length: int, **kwargs):
-        super().__init__(**kwargs)
-        self.title_length = title_length
-
-    def call(self, inputs):
-        # Split the concatenated input into its components
-        title_tokens = inputs[:, : self.title_length]
-        category_id = inputs[:, self.title_length : self.title_length + 1]
-        subcategory_id = inputs[:, self.title_length + 1 :]
-
-        return {
-            "title_tokens": title_tokens,
-            "category_id": category_id,
-            "subcategory_id": subcategory_id,
-        }
-
-    def compute_output_shape(self, input_shape):
-        return {
-            "title_tokens": (input_shape[0], self.title_length),
-            "category_id": (input_shape[0], 1),
-            "subcategory_id": (input_shape[0], 1),
-        }
+@dataclass
+class LSTURConfig:
+    """Configuration class for LSTUR model parameters."""
+    embedding_size: int = 300
+    cnn_filter_num: int = 300
+    cnn_kernel_size: int = 3
+    cnn_activation: str = "relu"
+    attention_hidden_dim: int = 200
+    gru_unit: int = 300
+    type: str = "ini"  # "ini" or "con" for different user encoder types
+    dropout_rate: float = 0.2
+    seed: int = 42
+    max_title_length: int = 50
+    max_history_length: int = 50
+    max_impressions_length: int = 5
+    process_user_id: bool = True  # LSTUR uses user ids as embedding layer
+    use_category: bool = False  # Whether to use category encoders
+    use_subcategory: bool = False  # Whether to use subcategory encoders
+    category_embedding_dim: int = 100  # Dimension for category embeddings
+    subcategory_embedding_dim: int = 100  # Dimension for subcategory embeddings
 
 
-class LSTUR(BaseModel):
-    """Neural News Recommendation with Long- and Short-term User Representations (LSTUR) model.
-
-    This model is based on the paper: "Neural News Recommendation with Long- and Short-term User Representations"
-    by D. An et al. It captures both long-term and short-term user interests using different neural architectures.
-
-    Key features:
-    - Long-term user representation: Uses user ID embeddings to capture stable preferences
-    - Short-term user representation: Uses LSTM/GRU to model recent browsing behavior
-    - News encoder: Processes news titles using CNN and attention mechanisms
-    - Category encoder: Processes category information (as per paper)
-    - Subcategory encoder: Processes subcategory information (as per paper)
-    - Dual user modeling: Combines long-term and short-term representations
+class NewsEncoder(keras.Model):
+    """News encoder component for LSTUR.
+    
+    Processes news titles through word embeddings, CNN, and additive attention.
+    Can optionally incorporate category and subcategory information for multi-view learning.
     """
 
-    def __init__(
-        self,
-        processed_news: Dict[str, Any],
-        embedding_size: int = 300,
-        cnn_filter_num: int = 400,
-        cnn_kernel_size: int = 3,
-        attention_hidden_dim: int = 200,
-        dropout_rate: float = 0.2,
-        cnn_activation: str = "relu",
-        max_title_length: int = 30,
-        max_history_length: int = 50,
-        max_impressions_length: int = 5,
-        num_users: int = 100000,  # Total number of users in the dataset
-        user_representation_type: str = "lstm",  # "lstm" or "gru"
-        user_combination_type: str = "ini",  # "ini" or "con"
-        process_user_id: bool = True,  # Only used in base model
-        category_embedding_dim: int = 100,
-        subcategory_embedding_dim: int = 100,
-        use_cat_subcat_encoder: bool = True,
-        seed: int = 42,
-        name: str = "lstur",
-        **kwargs,
-    ):
-        super().__init__(name=name, **kwargs)
+    def __init__(self, config: LSTURConfig, embedding_layer: layers.Embedding,
+                 category_encoder: Optional['CategoryEncoder'] = None,
+                 subcategory_encoder: Optional['SubcategoryEncoder'] = None,
+                 name: str = "news_encoder"):
+        super().__init__(name=name)
+        self.config = config
+        self.embedding_layer = embedding_layer
+        self.category_encoder = category_encoder
+        self.subcategory_encoder = subcategory_encoder
 
-        # Configurable parameters
-        self.embedding_size = embedding_size
-        self.cnn_filter_num = cnn_filter_num
-        self.cnn_kernel_size = cnn_kernel_size
-        self.attention_hidden_dim = attention_hidden_dim
-        self.dropout_rate = dropout_rate
-        self.cnn_activation = cnn_activation
-        self.max_title_length = max_title_length
-        self.max_history_length = max_history_length
-        self.max_impressions_length = max_impressions_length
-        self.num_users = num_users
-        self.user_representation_type = user_representation_type.lower()
-        self.user_combination_type = user_combination_type.lower()
-        self.category_embedding_dim = category_embedding_dim
-        self.subcategory_embedding_dim = subcategory_embedding_dim
-        self.use_cat_subcat_encoder = use_cat_subcat_encoder
-        self.seed = seed
-        self.process_user_id = process_user_id
-
-        keras.utils.set_random_seed(self.seed)
-
-        # Unpack processed data from the dataset
-        self.vocab_size = processed_news["vocab_size"]
-        self.embeddings_matrix = processed_news["embeddings"]
-        self.num_categories = processed_news.get("num_categories", 0)
-        self.num_subcategories = processed_news.get("num_subcategories", 0)
-
-        # Validate user representation type
-        if self.user_representation_type not in ["lstm", "gru"]:
-            raise ValueError("user_representation_type must be 'lstm' or 'gru'")
-        if self.user_combination_type not in ["ini", "con"]:
-            raise ValueError("user_combination_type must be 'ini' or 'con'")
-
-        # Build components
-        self.word_embedding_layer = self._build_word_embedding_layer()
-        self.user_embedding_layer = self._build_user_embedding_layer()
-
-        # Build topic encoders if enabled
-        if self.use_cat_subcat_encoder and self.num_categories > 0:
-            self.category_encoder = self._build_category_encoder()
-        if self.use_cat_subcat_encoder and self.num_subcategories > 0:
-            self.subcategory_encoder = self._build_subcategory_encoder()
-
-        self.newsencoder = self._build_newsencoder()
-        self.userencoder = self._build_userencoder()
-
-        # Build final training and scoring models
-        self.training_model, self.scorer_model = self._build_graph_models()
-
-    def _build_word_embedding_layer(self) -> layers.Embedding:
-        """Builds the word embedding layer for news titles."""
-        return layers.Embedding(
-            input_dim=self.vocab_size,
-            output_dim=self.embedding_size,
-            embeddings_initializer=keras.initializers.Constant(self.embeddings_matrix),
-            trainable=True,
-            mask_zero=False,
-            name="word_embedding",
+        # Create layers for title processing
+        self.dropout1 = layers.Dropout(self.config.dropout_rate, seed=self.config.seed, name="embedding_dropout")
+        self.cnn = layers.Conv1D(
+            self.config.cnn_filter_num,
+            self.config.cnn_kernel_size,
+            activation=self.config.cnn_activation,
+            padding="same",
+            bias_initializer=keras.initializers.Zeros(),
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
+            name="title_cnn",
+        )
+        self.dropout2 = layers.Dropout(self.config.dropout_rate, seed=self.config.seed, name="cnn_dropout")
+        self.compute_masking = ComputeMasking(name="compute_masking")
+        self.overwrite_masking = OverwriteMasking(name="overwrite_masking")
+        self.additive_attention = AdditiveAttentionLayer(
+            self.config.attention_hidden_dim,
+            seed=self.config.seed,
+            name="title_additive_attention",
         )
 
-    def _build_user_embedding_layer(self) -> layers.Embedding:
-        """Builds the user embedding layer for long-term user representation."""
-        return layers.Embedding(
-            input_dim=self.num_users + 1,  # +1 for padding/unknown users
-            output_dim=self.cnn_filter_num,
+    def build(self, input_shape):
+        super().build(input_shape)
+
+    def compute_output_shape(self, input_shape):
+        """Compute the output shape of the news encoder.
+        
+        Args:
+            input_shape: Input shape (batch_size, title_length or title_length + 2)
+            
+        Returns:
+            Output shape (batch_size, output_dim) where output_dim depends on 
+            whether category/subcategory encoders are used
+        """
+        # Base dimension from title CNN
+        output_dim = self.config.cnn_filter_num
+
+        # Add category dimension if encoder is present
+        if self.category_encoder is not None:
+            output_dim += self.config.category_embedding_dim
+
+        # Add subcategory dimension if encoder is present  
+        if self.subcategory_encoder is not None:
+            output_dim += self.config.subcategory_embedding_dim
+
+        return (input_shape[0], output_dim)
+
+    def call(self, inputs, training=None):
+        """Forward pass for news encoding.
+        
+        Args:
+            inputs: News token sequences 
+                - If concatenated: (batch_size, title_length + 2) with category/subcategory
+                - If title only: (batch_size, title_length)
+            training: Whether in training mode
+            
+        Returns:
+            News representations (batch_size, cnn_filter_num)
+        """
+        # Check if input contains concatenated data (title + category + subcategory)
+        input_shape = ops.shape(inputs)
+        has_category_data = input_shape[-1] > self.config.max_title_length
+
+        if has_category_data and (self.category_encoder is not None or self.subcategory_encoder is not None):
+            # Split concatenated input: [title, category, subcategory]
+            title_tokens = inputs[:, :self.config.max_title_length]
+            category_id = inputs[:, self.config.max_title_length:self.config.max_title_length + 1]
+            subcategory_id = inputs[:, self.config.max_title_length + 1:]
+
+            # Process title
+            title_vec = self._process_title(title_tokens, training)
+
+            # Collect embeddings for concatenation (following LSTUR paper approach)
+            representations = [title_vec]
+
+            # Process category if encoder is available
+            if self.category_encoder is not None:
+                category_vec = self.category_encoder(category_id, training=training)
+                representations.append(category_vec)
+
+            # Process subcategory if encoder is available
+            if self.subcategory_encoder is not None:
+                subcategory_vec = self.subcategory_encoder(subcategory_id, training=training)
+                representations.append(subcategory_vec)
+
+            if len(representations) > 1:
+                # Concatenate all representations (title + category + subcategory)
+                # This follows the LSTUR paper approach of combining embeddings
+
+                news_representation = ops.concatenate(representations, axis=-1)
+            else:
+                news_representation = title_vec
+
+        else:
+            # Title-only input or no category encoders available
+            if has_category_data:
+                title_tokens = inputs[:, :self.config.max_title_length]
+            else:
+                title_tokens = inputs
+
+            news_representation = self._process_title(title_tokens, training)
+
+        return news_representation
+
+    def _process_title(self, title_tokens, training=None):
+        """Process title tokens through CNN and attention.
+        
+        Args:
+            title_tokens: Title token sequences (batch_size, title_length)
+            training: Whether in training mode
+            
+        Returns:
+            Title representations (batch_size, cnn_filter_num)
+        """
+        # Word Embedding
+        embedded_sequences = self.embedding_layer(title_tokens)
+
+        # Dropout after embedding
+        y = self.dropout1(embedded_sequences, training=training)
+
+        # CNN
+        y = self.cnn(y)
+
+        # Dropout after CNN
+        y = self.dropout2(y, training=training)
+
+        # Create mask and apply it
+        mask = self.compute_masking(title_tokens)
+        y = self.overwrite_masking([y, mask])
+
+        # Apply masking for attention
+        padding_mask = ops.not_equal(title_tokens, 0)
+
+        # Additive Attention to get single news vector
+        title_representation = self.additive_attention(y, mask=padding_mask)
+
+        return title_representation
+
+
+class CategoryEncoder(keras.Model):
+    """Category encoder component for LSTUR.
+    
+    Simple embedding layer for category IDs as described in the LSTUR paper.
+    """
+
+    def __init__(self, config: LSTURConfig, num_categories: int, name: str = "category_encoder"):
+        super().__init__(name=name)
+        self.config = config
+        self.num_categories = num_categories
+
+        # Create embedding layer only
+        self.embedding = layers.Embedding(
+            self.num_categories + 1,
+            self.config.category_embedding_dim,
+            trainable=True,
+            name="category_embedding",
+        )
+
+    def build(self, input_shape):
+        super().build(input_shape)
+
+    def compute_output_shape(self, input_shape):
+        """Compute the output shape of the category encoder.
+        
+        Args:
+            input_shape: Input shape (batch_size, 1)
+            
+        Returns:
+            Output shape (batch_size, category_embedding_dim)
+        """
+        return (input_shape[0], self.config.category_embedding_dim)
+
+    def call(self, inputs, training=None):
+        """Forward pass for category encoding.
+        
+        Args:
+            inputs: Category IDs (batch_size, 1)
+            training: Whether in training mode
+            
+        Returns:
+            Category representations (batch_size, category_embedding_dim)
+        """
+        # Embedding
+        embedded = self.embedding(inputs)
+
+        # Reshape from (batch_size, 1, category_embedding_dim) to (batch_size, category_embedding_dim)
+        category_representation = ops.squeeze(embedded, axis=1)
+
+        return category_representation
+
+
+class SubcategoryEncoder(keras.Model):
+    """Subcategory encoder component for LSTUR.
+    
+    Simple embedding layer for subcategory IDs as described in the LSTUR paper.
+    """
+
+    def __init__(self, config: LSTURConfig, num_subcategories: int, name: str = "subcategory_encoder"):
+        super().__init__(name=name)
+        self.config = config
+        self.num_subcategories = num_subcategories
+
+        # Create embedding layer only
+        self.embedding = layers.Embedding(
+            self.num_subcategories + 1,
+            self.config.subcategory_embedding_dim,
+            trainable=True,
+            name="subcategory_embedding",
+        )
+
+    def build(self, input_shape):
+        super().build(input_shape)
+
+    def compute_output_shape(self, input_shape):
+        """Compute the output shape of the subcategory encoder.
+        
+        Args:
+            input_shape: Input shape (batch_size, 1)
+            
+        Returns:
+            Output shape (batch_size, subcategory_embedding_dim)
+        """
+        return (input_shape[0], self.config.subcategory_embedding_dim)
+
+    def call(self, inputs, training=None):
+        """Forward pass for subcategory encoding.
+        
+        Args:
+            inputs: Subcategory IDs (batch_size, 1)
+            training: Whether in training mode
+            
+        Returns:
+            Subcategory representations (batch_size, subcategory_embedding_dim)
+        """
+        # Embedding
+        embedded = self.embedding(inputs)
+
+        # Reshape from (batch_size, 1, subcategory_embedding_dim) to (batch_size, subcategory_embedding_dim)
+        subcategory_representation = ops.squeeze(embedded, axis=1)
+
+        return subcategory_representation
+
+
+class UserEncoder(keras.Model):
+    """User encoder component for LSTUR.
+    
+    Processes user history through news encoder and GRU with user embeddings
+    to produce user representations.
+    """
+
+    def __init__(self, config: LSTURConfig, news_encoder: NewsEncoder,
+                 num_users: int, name: str = "user_encoder"):
+        super().__init__(name=name)
+        self.config = config
+        self.news_encoder = news_encoder
+        self.num_users = num_users
+
+        # User embedding layer
+        self.user_embedding = layers.Embedding(
+            self.num_users,
+            self.config.gru_unit,
             trainable=True,
             embeddings_initializer="zeros",
             name="user_embedding",
         )
 
-    def _build_category_encoder(self) -> keras.Model:
-        """Builds the category encoder which processes category information.
-
-        This method creates a Keras model that embeds topic indices and projects them
-        into the same dimension as the CNN filter. The resulting model outputs a dense
-        vector representation for each topic.
-
-        Returns:
-            keras.Model: A Keras model that encodes topic information.
-        """
-        input_category = keras.Input(shape=(1,), dtype="int32", name="category_id")
-
-        category_embedding = layers.Embedding(
-            self.num_categories + 1,
-            self.category_embedding_dim,
-            trainable=True,
-            name="category_embedding",
+        # TimeDistributed layer for processing history
+        self.time_distributed = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_user"
         )
 
-        category_emb = category_embedding(input_category)
-        category_dense = layers.Dense(
-            self.cnn_filter_num,
-            activation=self.cnn_activation,
+        # GRU layer
+        self.gru = layers.GRU(
+            self.config.gru_unit,
+            kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
+            recurrent_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
             bias_initializer=keras.initializers.Zeros(),
-            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-            name="category_projection",
-        )(category_emb)
-        category_vector = layers.Reshape((1, self.cnn_filter_num))(category_dense)
-
-        return keras.Model(input_category, category_vector, name="category_encoder")
-
-    def _build_subcategory_encoder(self) -> keras.Model:
-        """Builds the subcategory encoder which processes subcategory information.
-
-        This method creates a Keras model that embeds subtopic indices and projects them
-        into the same dimension as the CNN filter. The resulting model outputs a dense
-        vector representation for each subtopic.
-
-        Returns:
-            keras.Model: A Keras model that encodes subtopic information.
-        """
-        input_subcategory = keras.Input(shape=(1,), dtype="int32", name="subcategory_id")
-
-        subcategory_embedding = layers.Embedding(
-            self.num_subcategories + 1,
-            self.subcategory_embedding_dim,
-            trainable=True,
-            name="subcategory_embedding",
+            return_sequences=False,
+            name="user_gru",
         )
 
-        subcategory_emb = subcategory_embedding(input_subcategory)
-        subcategory_dense = layers.Dense(
-            self.cnn_filter_num,
-            activation=self.cnn_activation,
-            bias_initializer=keras.initializers.Zeros(),
-            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-            name="subcategory_projection",
-        )(subcategory_emb)
-        subcategory_vector = layers.Reshape((1, self.cnn_filter_num))(subcategory_dense)
+        # Masking layer for GRU input
+        self.masking = layers.Masking(mask_value=0.0, name="gru_masking")
 
-        return keras.Model(input_subcategory, subcategory_vector, name="subcategory_encoder")
-
-    def _build_newsencoder(self) -> keras.Model:
-        """Builds the news encoder which processes news titles and topics."""
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            # News input includes title + category + subcategory
-            news_input = keras.Input(
-                shape=(self.max_title_length + 2,),  # title + category + subcategory
-                dtype="int32",
-                name="news_tokens",
-            )
-
-            # Split the input into its components
-            news_components = NewsInputSplitter(
-                title_length=self.max_title_length,
-                name="news_input_splitter",
-            )(news_input)
-
-            # Title processing
-            embedded_title = self.word_embedding_layer(news_components["title_tokens"])
-            title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(embedded_title)
-
-            title_cnn = layers.Conv1D(
-                self.cnn_filter_num,
-                self.cnn_kernel_size,
-                activation=self.cnn_activation,
-                padding="same",
-                name="title_cnn",
+        # Dense layer for "con" type
+        if self.config.type == "con":
+            self.concat_dense = layers.Dense(
+                self.config.gru_unit,
                 bias_initializer=keras.initializers.Zeros(),
-                kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-            )(title_dropout)
-
-            title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(title_cnn)
-            masked_title = layers.Masking()(
-                OverwriteMasking()(
-                    [title_dropout, ComputeMasking()(news_components["title_tokens"])]
-                )
+                kernel_initializer=keras.initializers.GlorotUniform(seed=self.config.seed),
+                name="concat_dense",
             )
 
-            title_attention = AdditiveAttentionLayer(
-                self.attention_hidden_dim, name="title_word_attention"
-            )(masked_title)
-            title_vector = layers.Reshape((1, self.cnn_filter_num))(title_attention)
+    def build(self, input_shape):
+        super().build(input_shape)
 
-            # Category and subcategory processing
-            category_vector = self.category_encoder(news_components["category_id"])
-            subcategory_vector = self.subcategory_encoder(news_components["subcategory_id"])
+    def compute_output_shape(self, input_shape):
+        """Compute the output shape of the user encoder.
+        
+        Args:
+            input_shape: Tuple representing input shapes
+            
+        Returns:
+            Output shape (batch_size, gru_unit)
+        """
+        return (input_shape[0][0], self.config.gru_unit)
 
-            # Concatenate all views: e = [et, ev, esv]
-            concat_views = layers.Concatenate(axis=1)(
-                [title_vector, category_vector, subcategory_vector]
-            )
-            news_vector = AdditiveAttentionLayer(self.attention_hidden_dim, name="view_attention")(
-                concat_views
-            )
+    def call(self, inputs, training=None):
+        """Forward pass for user encoding.
+        
+        Args:
+            inputs: List of [history_tokens, user_indices]
+                - history_tokens: (batch_size, history_length, title_length)
+                - user_indices: (batch_size,) or (batch_size, 1)
+            training: Whether in training mode
+            
+        Returns:
+            User representations (batch_size, gru_unit)
+        """
+        history_tokens, user_indices = inputs
 
-            return keras.Model(news_input, news_vector, name="news_encoder")
+        # Get user embeddings
+        # Handle both (batch_size,) and (batch_size, 1) shapes
+        if len(ops.shape(user_indices)) == 1:
+            user_indices = ops.expand_dims(user_indices, axis=-1)
 
-        # Fallback to title-only encoding (original behavior)
-        input_title = keras.Input(
-            shape=(self.max_title_length,), dtype="int32", name="news_tokens"
-        )
+        long_u_emb = self.user_embedding(user_indices)
+        long_u_emb = ops.squeeze(long_u_emb, axis=1)  # (batch_size, gru_unit)
 
-        embedded_title = self.word_embedding_layer(input_title)
-        title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(embedded_title)
+        # Process all history items using TimeDistributed layer
+        click_title_presents = self.time_distributed(history_tokens, training=training)
+        # Result: (batch_size, history_length, cnn_filter_num)
 
-        title_cnn = layers.Conv1D(
-            self.cnn_filter_num,
-            self.cnn_kernel_size,
-            activation=self.cnn_activation,
-            padding="same",
-            name="title_cnn",
-            bias_initializer=keras.initializers.Zeros(),
-            kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-        )(title_dropout)
+        # Apply masking for GRU
+        masked_presents = self.masking(click_title_presents)
 
-        title_dropout = layers.Dropout(self.dropout_rate, seed=self.seed)(title_cnn)
-        masked_title = layers.Masking()(
-            OverwriteMasking()([title_dropout, ComputeMasking()(input_title)])
-        )
-
-        title_attention = AdditiveAttentionLayer(
-            self.attention_hidden_dim, name="title_word_attention"
-        )(masked_title)
-
-        return keras.Model(input_title, title_attention, name="news_encoder")
-
-    def _build_userencoder(self) -> keras.Model:
-        """Builds the user encoder which combines long-term and short-term representations."""
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            # Input includes title + category + subcategory concatenated
-            history_input = keras.Input(
-                shape=(
-                    self.max_history_length,
-                    self.max_title_length + 2,
-                ),  # title + category + subcategory
-                dtype="int32",
-                name="history_tokens",
-            )
+        if self.config.type == "ini":
+            # Use user embedding as initial state
+            user_present = self.gru(masked_presents, initial_state=[long_u_emb])
+        elif self.config.type == "con":
+            # Concatenate short-term and long-term representations
+            short_uemb = self.gru(masked_presents)
+            concat_emb = ops.concatenate([short_uemb, long_u_emb], axis=-1)
+            user_present = self.concat_dense(concat_emb)
         else:
-            # Original behavior - just title tokens
-            history_input = keras.Input(
-                shape=(self.max_history_length, self.max_title_length),
-                dtype="int32",
-                name="history_tokens",
-            )
+            raise ValueError(f"Invalid user encoder type: {self.config.type}")
 
-        user_ids = keras.Input(
-            shape=(1,),
-            dtype="int32",
-            name="user_ids",
+        return user_present
+
+
+class LSTURScorer(keras.Model):
+    """Scoring component for LSTUR.
+    
+    Handles different scoring scenarios: training (multiple candidates with softmax),
+    single candidate scoring (with sigmoid), and multiple candidate scoring (raw scores).
+    """
+
+    def __init__(self, config: LSTURConfig, news_encoder: NewsEncoder, user_encoder: UserEncoder,
+                 name: str = "lstur_scorer"):
+        super().__init__(name=name)
+        self.config = config
+        self.news_encoder = news_encoder
+        self.user_encoder = user_encoder
+
+        # Store TimeDistributed layers for candidate processing
+        self.candidate_encoder_train = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_candidates"
+        )
+        self.candidate_encoder_eval = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_eval"
         )
 
-        # Use the existing user embedding layer - direct usage like original
-        long_u_emb = layers.Reshape((self.cnn_filter_num,))(self.user_embedding_layer(user_ids))
+    def build(self, input_shape):
+        super().build(input_shape)
 
-        # Process history through news encoder
-        click_title_presents = layers.TimeDistributed(self.newsencoder)(history_input)
+    def score_training_batch(self, history_inputs, user_indices, candidate_inputs, training=None):
+        """Score training batch with softmax output.
+        
+        Args:
+            history_inputs: History tensor (batch_size, history_length, title_length)
+            user_indices: User indices (batch_size, 1)
+            candidate_inputs: Candidates tensor (batch_size, num_candidates, title_length)
+            training: Whether in training mode
+            
+        Returns:
+            Softmax scores (batch_size, num_candidates)
+        """
+        # Get user representation
+        user_repr = self.user_encoder([history_inputs, user_indices], training=training)
 
-        if self.user_combination_type == "ini":
-            if self.user_representation_type == "lstm":
-                user_present = layers.LSTM(
-                    self.cnn_filter_num,
-                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=keras.initializers.Zeros(),
-                )(
-                    layers.Masking(mask_value=0.0)(click_title_presents),
-                    initial_state=[long_u_emb, long_u_emb],  # LSTM needs [h, c]
-                )
-            else:  # gru
-                user_present = layers.GRU(
-                    self.cnn_filter_num,
-                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=keras.initializers.Zeros(),
-                )(
-                    layers.Masking(mask_value=0.0)(click_title_presents),
-                    initial_state=[long_u_emb],  # GRU only needs [h]
-                )
-        elif self.user_combination_type == "con":
-            if self.user_representation_type == "lstm":
-                short_uemb = layers.LSTM(
-                    self.cnn_filter_num,
-                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=keras.initializers.Zeros(),
-                )(layers.Masking(mask_value=0.0)(click_title_presents))
-            else:  # gru
-                short_uemb = layers.GRU(
-                    self.cnn_filter_num,
-                    kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    recurrent_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-                    bias_initializer=keras.initializers.Zeros(),
-                )(layers.Masking(mask_value=0.0)(click_title_presents))
-
-            user_present = layers.Concatenate()([short_uemb, long_u_emb])
-            user_present = layers.Dense(
-                self.cnn_filter_num,
-                bias_initializer=keras.initializers.Zeros(),
-                kernel_initializer=keras.initializers.glorot_uniform(seed=self.seed),
-            )(user_present)
-
-        return keras.Model([history_input, user_ids], user_present, name="user_encoder")
-
-    def _build_graph_models(self) -> Tuple[keras.Model, keras.Model]:
-        """Builds the main training and scoring models."""
-        # --- Inputs for Training Model ---
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            # History inputs with category and subcategory information
-            history_tokens_input_train = keras.Input(
-                shape=(
-                    self.max_history_length,
-                    self.max_title_length + 2,
-                ),  # title + category + subcategory
-                dtype="int32",
-                name="history_tokens_train",
-            )
-            candidate_tokens_input_train = keras.Input(
-                shape=(
-                    self.max_impressions_length,
-                    self.max_title_length + 2,
-                ),  # title + topic + subtopic
-                dtype="int32",
-                name="candidate_tokens_train",
-            )
-        else:
-            # Original behavior - just title tokens
-            history_tokens_input_train = keras.Input(
-                shape=(self.max_history_length, self.max_title_length),
-                dtype="int32",
-                name="history_tokens_train",
-            )
-            candidate_tokens_input_train = keras.Input(
-                shape=(self.max_impressions_length, self.max_title_length),
-                dtype="int32",
-                name="candidate_tokens_train",
-            )
-
-        user_ids = keras.Input(
-            shape=(1,),  # Single user ID per batch item
-            dtype="int32",
-            name="user_ids_train",
-        )
-
-        # --- Training Model Graph ---
-        # Pass history tokens and user ID separately to userencoder
-        user_representation_train = self.userencoder([history_tokens_input_train, user_ids])
-
-        # Get candidate news representations (no user IDs needed for news encoding)
-        candidate_news_representation_train = layers.TimeDistributed(
-            self.newsencoder, name="td_candidate_news_encoder_train"
-        )(candidate_tokens_input_train)
+        # Get representations for all candidates
+        candidate_reprs = self.candidate_encoder_train(candidate_inputs, training=training)
+        # Result: (batch_size, num_candidates, cnn_filter_num)
 
         # Calculate scores using dot product
-        scores = layers.Dot(axes=-1, name="dot_product_train")(
-            [candidate_news_representation_train, user_representation_train]
-        )
+        scores = layers.Dot(axes=-1, name="dot_product_train")([candidate_reprs, user_repr])
 
         # Apply softmax for training
-        preds_train = layers.Activation("softmax", name="softmax_activation_train")(scores)
+        return layers.Activation("softmax", name="softmax_activation")(scores)
 
+    def score_single_candidate(self, history_inputs, user_indices, candidate_inputs, training=None):
+        """Score single candidate with sigmoid output.
+        
+        Args:
+            history_inputs: History tensor (batch_size, history_length, title_length)
+            user_indices: User indices (batch_size, 1)
+            candidate_inputs: Candidate tensor (batch_size, title_length)
+            training: Whether in training mode
+            
+        Returns:
+            Sigmoid scores (batch_size, 1)
+        """
+        # Get user representation
+        user_repr = self.user_encoder([history_inputs, user_indices], training=training)
+
+        # Get candidate representation
+        candidate_repr = self.news_encoder(candidate_inputs, training=training)
+
+        # Calculate score using dot product
+        score = layers.Dot(axes=-1, name="dot_product_single")([candidate_repr, user_repr])
+
+        # Apply sigmoid for probability
+        return layers.Activation("sigmoid", name="sigmoid_activation")(score)
+
+    def score_multiple_candidates(self, history_inputs, user_indices, candidate_inputs, training=False):
+        """Score multiple candidates with sigmoid activation.
+        
+        Args:
+            history_inputs: History tensor (batch_size, history_length, title_length)
+            user_indices: User indices (batch_size, 1)
+            candidate_inputs: Candidates tensor (batch_size, num_candidates, title_length)
+            training: Whether in training mode
+            
+        Returns:
+            Sigmoid scores (batch_size, num_candidates)
+        """
+        # Get user representation
+        user_repr = self.user_encoder([history_inputs, user_indices], training=training)
+
+        # Get representations for all candidates
+        candidate_reprs = self.candidate_encoder_eval(candidate_inputs, training=training)
+        # Result: (batch_size, num_candidates, cnn_filter_num)
+
+        # Expand user representation for broadcasting
+        user_repr_expanded = ops.expand_dims(user_repr, axis=1)
+
+        # Calculate scores using dot product
+        scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)
+
+        # Apply sigmoid activation for consistency with single candidate scoring
+        return ops.sigmoid(scores)
+
+
+class LSTUR(BaseModel):
+    """Neural News Recommendation with Long- and Short-term User Representations (LSTUR) model.
+
+    This model is based on the paper: "Neural News Recommendation with Long- and Short-term 
+    User Representations" by M. An et al., ACL 2019. It learns news representations through
+    CNN and attention, and user representations through GRU with user embeddings.
+
+    Key features:
+    - CNN-based news encoding with additive attention
+    - GRU-based user encoding with long-term user embeddings
+    - Two types of user encoders: "ini" (initial state) and "con" (concatenation)
+    
+    Refactored with clean architecture using separate components for better
+    maintainability, testability, and code organization.
+    """
+
+    def __init__(
+            self,
+            processed_news: Dict[str, Any],
+            num_users: int,
+            embedding_size: int = 300,
+            cnn_filter_num: int = 300,
+            cnn_kernel_size: int = 3,
+            cnn_activation: str = "relu",
+            attention_hidden_dim: int = 200,
+            gru_unit: int = 300,
+            type: str = "ini",
+            dropout_rate: float = 0.2,
+            seed: int = 42,
+            max_title_length: int = 50,
+            max_history_length: int = 50,
+            max_impressions_length: int = 5,
+            process_user_id: bool = True,
+            use_category: bool = False,
+            use_subcategory: bool = False,
+            category_embedding_dim: int = 100,
+            subcategory_embedding_dim: int = 100,
+            name: str = "lstur",
+            **kwargs,
+    ):
+        super().__init__(name=name, **kwargs)
+
+        # Create configuration object
+        self.config = LSTURConfig(
+            embedding_size=embedding_size,
+            cnn_filter_num=cnn_filter_num,
+            cnn_kernel_size=cnn_kernel_size,
+            cnn_activation=cnn_activation,
+            attention_hidden_dim=attention_hidden_dim,
+            gru_unit=gru_unit,
+            type=type,
+            dropout_rate=dropout_rate,
+            seed=seed,
+            max_title_length=max_title_length,
+            max_history_length=max_history_length,
+            max_impressions_length=max_impressions_length,
+            process_user_id=process_user_id,
+            use_category=use_category,
+            use_subcategory=use_subcategory,
+            category_embedding_dim=category_embedding_dim,
+            subcategory_embedding_dim=subcategory_embedding_dim,
+        )
+
+        # Store processed news data and num_users
+        self.processed_news = processed_news
+        self.num_users = num_users
+        self._validate_processed_news()
+
+        # Initialize components
+        self._create_components()
+
+        # Set BaseModel attributes for fast evaluation (required by BaseModel)
+        self.process_user_id = process_user_id
+        self.float_dtype = "float32"
+
+    def _validate_processed_news(self) -> None:
+        """Validate processed news data integrity."""
+        required_keys = ["vocab_size", "embeddings"]
+        for key in required_keys:
+            if key not in self.processed_news:
+                raise ValueError(f"Missing required key '{key}' in processed_news")
+
+        # Check for category/subcategory data if enabled
+        if self.config.use_category and "num_categories" not in self.processed_news:
+            raise ValueError("use_category=True but 'num_categories' not found in processed_news")
+
+        if self.config.use_subcategory and "num_subcategories" not in self.processed_news:
+            raise ValueError("use_subcategory=True but 'num_subcategories' not found in processed_news")
+
+        embeddings_matrix = self.processed_news["embeddings"]
+        if np.isnan(embeddings_matrix).any():
+            raise ValueError("Embeddings matrix contains NaN values")
+
+        if embeddings_matrix.shape[1] != self.config.embedding_size:
+            raise ValueError(
+                f"Embeddings dimension {embeddings_matrix.shape[1]} doesn't match "
+                f"configured embedding_size {self.config.embedding_size}"
+            )
+
+    def _create_components(self) -> None:
+        """Create all model components in proper order."""
+        # Set random seed
+        keras.utils.set_random_seed(self.config.seed)
+
+        # Create shared embedding layer
+        self.embedding_layer = layers.Embedding(
+            input_dim=self.processed_news["vocab_size"],
+            output_dim=self.config.embedding_size,
+            embeddings_initializer=keras.initializers.Constant(self.processed_news["embeddings"]),
+            trainable=True,
+            mask_zero=False,  # LSTUR uses custom masking
+            name="word_embedding",
+        )
+
+        # Create category/subcategory encoders if enabled
+        category_encoder = None
+        subcategory_encoder = None
+
+        if self.config.use_category:
+            category_encoder = CategoryEncoder(
+                self.config, self.processed_news["num_categories"]
+            )
+
+        if self.config.use_subcategory:
+            subcategory_encoder = SubcategoryEncoder(
+                self.config, self.processed_news["num_subcategories"]
+            )
+
+        # Create component encoders
+        self.news_encoder = NewsEncoder(
+            self.config,
+            self.embedding_layer,
+            category_encoder=category_encoder,
+            subcategory_encoder=subcategory_encoder
+        )
+        self.user_encoder = UserEncoder(self.config, self.news_encoder, self.num_users)
+        self.scorer = LSTURScorer(self.config, self.news_encoder, self.user_encoder)
+
+        # Build training and scorer models for compatibility
+        self.training_model, self.scorer_model = self._build_compatibility_models()
+
+    def _build_compatibility_models(self) -> Tuple[keras.Model, keras.Model]:
+        """Build training and scorer models for backward compatibility."""
+        # ----- Training model -----
+        history_input = keras.Input(
+            shape=(self.config.max_history_length, self.config.max_title_length),
+            dtype="int32", name="hist_tokens"
+        )
+        user_indices_input = keras.Input(
+            shape=(1,), dtype="int32", name="user_indices"
+        )
+        candidates_input = keras.Input(
+            shape=(self.config.max_impressions_length, self.config.max_title_length),
+            dtype="int32", name="cand_tokens"
+        )
+
+        training_output = self.scorer.score_training_batch(
+            history_input, user_indices_input, candidates_input
+        )
         training_model = keras.Model(
-            inputs=[history_tokens_input_train, user_ids, candidate_tokens_input_train],
-            outputs=preds_train,
-            name="lstur_training_model",
+            inputs=[history_input, user_indices_input, candidates_input],
+            outputs=training_output,
+            name="lstur_training_model"
         )
 
-        # --- Inputs for Scorer Model ---
-        # History Inputs
-        hist_tokens_input_score = keras.Input(
-            shape=(self.max_history_length, self.max_title_length),
-            dtype="int32",
-            name="history_tokens_score",
+        # ----- Scorer model -----
+        history_input_score = keras.Input(
+            shape=(self.config.max_history_length, self.config.max_title_length),
+            dtype="int32", name="history_tokens_score"
+        )
+        user_indices_input_score = keras.Input(
+            shape=(1,), dtype="int32", name="user_indices_score"
+        )
+        single_candidate_input = keras.Input(
+            shape=(self.config.max_title_length,),
+            dtype="int32", name="single_candidate_tokens_score"
         )
 
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            # History inputs with category and subcategory information
-            hist_category_input_score = keras.Input(
-                shape=(self.max_history_length, 1),
-                dtype="int32",
-                name="history_category_score",
-            )
-            hist_subcategory_input_score = keras.Input(
-                shape=(self.max_history_length, 1),
-                dtype="int32",
-                name="history_subcategory_score",
-            )
-
-        # User IDs
-        user_ids_score = keras.Input(
-            shape=(1,),  # Single user ID per batch item
-            dtype="int32",
-            name="user_ids_score",
+        scorer_output = self.scorer.score_single_candidate(
+            history_input_score, user_indices_input_score, single_candidate_input
         )
-
-        # Candidate Inputs
-        cand_tokens_input_score = keras.Input(
-            shape=(1, self.max_title_length),
-            dtype="int32",
-            name="candidate_tokens_score",
+        scorer_model = keras.Model(
+            inputs=[history_input_score, user_indices_input_score, single_candidate_input],
+            outputs=scorer_output,
+            name="lstur_scorer_model"
         )
-
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            # Candidate inputs with category and subcategory information
-            cand_category_input_score = keras.Input(
-                shape=(1, 1),
-                dtype="int32",
-                name="candidate_category_score",
-            )
-            cand_subcategory_input_score = keras.Input(
-                shape=(1, 1),
-                dtype="int32",
-                name="candidate_subcategory_score",
-            )
-
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            history_concat_score = layers.Concatenate(axis=-1)(
-                [
-                    hist_tokens_input_score,
-                    hist_category_input_score,
-                    hist_subcategory_input_score,
-                ]
-            )
-            candidate_concat_score = layers.Concatenate(axis=-1)(
-                [
-                    cand_tokens_input_score,
-                    cand_category_input_score,
-                    cand_subcategory_input_score,
-                ]
-            )
-            # Reshape to remove the extra dimension, similar to NAML model
-            candidate_concat_score = layers.Reshape((-1,))(candidate_concat_score)
-
-        # --- Scorer Model Graph ---
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            user_representation_score = self.userencoder([history_concat_score, user_ids_score])
-            single_candidate_representation_score = self.newsencoder(candidate_concat_score)
-        else:
-            user_representation_score = self.userencoder([hist_tokens_input_score, user_ids_score])
-            single_candidate_representation_score = self.newsencoder(cand_tokens_input_score)
-
-        pred_score = layers.Dot(axes=-1, name="dot_product_score")(
-            [single_candidate_representation_score, user_representation_score]
-        )
-
-        # Apply sigmoid for single prediction probability
-        pred_score = layers.Activation("sigmoid", name="sigmoid_activation_score")(pred_score)
-
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
-            scorer_model = keras.Model(
-                inputs=[history_concat_score, user_ids_score, candidate_concat_score],
-                outputs=pred_score,
-                name="lstur_scorer_model",
-            )
-        else:
-            scorer_model = keras.Model(
-                inputs=[hist_tokens_input_score, user_ids_score, cand_tokens_input_score],
-                outputs=pred_score,
-                name="lstur_scorer_model",
-            )
 
         return training_model, scorer_model
 
-    def call(self, inputs: Dict[str, keras.KerasTensor], training: Optional[bool] = None) -> keras.KerasTensor:
-        """Main forward pass of the LSTUR model.
+    def _build_newsencoder(self) -> keras.Model:
+        """Legacy method for backward compatibility - returns news encoder."""
+        return self.news_encoder
 
-        This method serves as the main entry point for both training and inference.
-        It handles different input formats and routes them to the appropriate internal model.
+    def _build_userencoder(self) -> keras.Model:
+        """Legacy method for backward compatibility - returns user encoder."""
+        return self.user_encoder
 
-        Args:
-            inputs (dict): Dictionary containing input tensors
-            training (bool, optional): Whether the model is in training mode
+    def _build_graph_models(self) -> Tuple[keras.Model, keras.Model]:
+        """Legacy method for backward compatibility - returns training and scorer models."""
+        return self.training_model, self.scorer_model
 
-        Returns:
-            keras.KerasTensor: Model predictions
-        """
-        # Training mode - use training model
+    def _validate_inputs(self, inputs: Dict, training: bool = None) -> None:
+        """Validate input format and shapes based on mode."""
+        if not isinstance(inputs, dict):
+            raise TypeError("Inputs must be a dictionary")
+
+        input_keys = set(inputs.keys())
+
         if training:
-            return self._handle_training(inputs)
+            # Training mode expects hist_tokens, user_ids, and cand_tokens
+            # Note: user_ids is the key used by the dataloader
+            required_keys = {"hist_tokens", "user_ids", "cand_tokens"}
+            if not required_keys.issubset(input_keys):
+                raise ValueError(
+                    f"Training mode requires keys: {required_keys}, "
+                    f"but got keys: {list(input_keys)}"
+                )
+        else:
+            # Inference mode - check for different valid combinations
+            # Add validation logic for inference mode if needed
+            pass
 
-        # Inference mode - use scorer model
-        return self._handle_inference(inputs)
-
-    def _handle_training(self, inputs: Dict[str, keras.KerasTensor]) -> keras.KerasTensor:
-        """Handle the forward pass during training mode.
-
+    def call(self, inputs, training=None):
+        """Main forward pass of the LSTUR model.
+        
+        Routes to appropriate methods based on training mode and input format.
+        
         Args:
-            inputs (dict): Dictionary containing:
-                - 'hist_tokens': User history tokens, shape (batch_size, history_len, title_len)
-                - 'user_ids': User IDs for each batch item, shape (batch_size, 1)
-                - 'cand_tokens': Candidate news tokens, shape (batch_size, num_candidates, title_len)
-                - 'hist_category': User history categories (if category encoder enabled)
-                - 'hist_subcategory': User history subcategories (if category encoder enabled)
-                - 'cand_category': Candidate news categories (if category encoder enabled)
-                - 'cand_subcategory': Candidate news subcategories (if category encoder enabled)
-
+            inputs: Dictionary with input tensors
+            training: Whether in training mode
+            
         Returns:
-            keras.KerasTensor: Softmax probabilities for each candidate
-                Shape: (batch_size, num_candidates)
+            Model predictions based on mode and input format
         """
+        self._validate_inputs(inputs, training)
+
+        if training:
+            # Training mode: always use training format
+            return self._handle_training(inputs, training)
+        else:
+            # Inference mode: route based on input format
+            if "hist_tokens" in inputs and "cand_tokens" in inputs:
+                # Multiple candidates format
+                return self._handle_multiple_candidates(inputs)
+            else:
+                # Add other inference modes as needed
+                raise ValueError("Invalid input format for inference mode")
+
+    def _handle_training(self, inputs, training=None):
+        """Handle training batch scoring with softmax output."""
+        # Extract the inputs - note that dataloader uses "user_ids" not "user_indices"
         history_tokens = inputs["hist_tokens"]
-        user_ids = inputs["user_ids"]
+        user_ids = inputs.get("user_ids", inputs.get("user_indices"))  # Handle both keys
         candidate_tokens = inputs["cand_tokens"]
 
-        # Handle topic encoder inputs if enabled
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
+        # Check if we have category/subcategory data
+        if "hist_category" in inputs and "hist_subcategory" in inputs:
             # Concatenate history inputs: title + category + subcategory
-            hist_category = inputs.get("hist_category")
-            hist_subcategory = inputs.get("hist_subcategory")
-            if hist_category is not None and hist_subcategory is not None:
-                # Expand dimensions to match the rank of title tokens
-                hist_category = keras.ops.expand_dims(hist_category, axis=-1)
-                hist_subcategory = keras.ops.expand_dims(hist_subcategory, axis=-1)
-                history_tokens = keras.ops.concatenate(
-                    [history_tokens, hist_category, hist_subcategory], axis=-1
-                )
+            hist_category = ops.expand_dims(inputs["hist_category"], axis=-1)
+            hist_subcategory = ops.expand_dims(inputs["hist_subcategory"], axis=-1)
+            history_tokens = ops.concatenate(
+                [history_tokens, hist_category, hist_subcategory], axis=-1
+            )
 
             # Concatenate candidate inputs: title + category + subcategory
-            cand_category = inputs.get("cand_category")
-            cand_subcategory = inputs.get("cand_subcategory")
-            if cand_category is not None and cand_subcategory is not None:
-                # Expand dimensions to match the rank of title tokens
-                cand_category = keras.ops.expand_dims(cand_category, axis=-1)
-                cand_subcategory = keras.ops.expand_dims(cand_subcategory, axis=-1)
-                candidate_tokens = keras.ops.concatenate(
-                    [candidate_tokens, cand_category, cand_subcategory], axis=-1
-                )
+            cand_category = ops.expand_dims(inputs["cand_category"], axis=-1)
+            cand_subcategory = ops.expand_dims(inputs["cand_subcategory"], axis=-1)
+            candidate_tokens = ops.concatenate(
+                [candidate_tokens, cand_category, cand_subcategory], axis=-1
+            )
 
-        return self.training_model([history_tokens, user_ids, candidate_tokens], training=True)
-
-    def _handle_inference(self, inputs: Dict[str, keras.KerasTensor]) -> keras.KerasTensor:
-        """Handle the forward pass during inference mode.
-
-        Args:
-            inputs (dict): Dictionary containing either:
-                - 'history_tokens', 'user_ids', 'single_candidate_tokens' for single candidate scoring
-                - 'history_tokens', 'user_ids', 'cand_tokens' for multiple candidate scoring
-                - Category/subcategory inputs if category encoder is enabled
-
-        Returns:
-            keras.KerasTensor: Model predictions
-        """
-        # Case 1: Single candidate scoring
-        if "single_candidate_tokens" in inputs:
-            history_tokens = inputs["history_tokens"]
-            user_ids = inputs["user_ids"]
-            candidate_tokens = inputs["single_candidate_tokens"]
-
-            # Handle topic encoder inputs if enabled
-            if (
-                self.use_cat_subcat_encoder
-                and self.num_categories > 0
-                and self.num_subcategories > 0
-            ):
-                # Concatenate history inputs: title + category + subcategory
-                hist_category = inputs.get("history_category")
-                hist_subcategory = inputs.get("history_subcategory")
-                if hist_category is not None and hist_subcategory is not None:
-                    # Expand dimensions to match the rank of title tokens
-                    hist_category = keras.ops.expand_dims(hist_category, axis=-1)
-                    hist_subcategory = keras.ops.expand_dims(hist_subcategory, axis=-1)
-                    history_tokens = keras.ops.concatenate(
-                        [history_tokens, hist_category, hist_subcategory], axis=-1
-                    )
-
-                # Concatenate candidate inputs: title + category + subcategory
-                cand_category = inputs.get("single_candidate_category")
-                cand_subcategory = inputs.get("single_candidate_subcategory")
-                if cand_category is not None and cand_subcategory is not None:
-                    # Expand dimensions to match the rank of title tokens
-                    cand_category = keras.ops.expand_dims(cand_category, axis=-1)
-                    cand_subcategory = keras.ops.expand_dims(cand_subcategory, axis=-1)
-                    candidate_tokens = keras.ops.concatenate(
-                        [candidate_tokens, cand_category, cand_subcategory], axis=-1
-                    )
-
-            return self.scorer_model([history_tokens, user_ids, candidate_tokens], training=False)
-
-        # Case 2: Multiple candidates scoring
-        if "cand_tokens" in inputs:
-            return self._score_multiple_candidates(inputs)
-
-        raise ValueError(
-            "Invalid input format for inference. Expected 'single_candidate_tokens' or 'cand_tokens'"
+        return self.scorer.score_training_batch(
+            history_tokens,
+            user_ids,
+            candidate_tokens,
+            training=training
         )
 
-    def _score_multiple_candidates(self, inputs: Dict[str, keras.KerasTensor]) -> keras.KerasTensor:
-        """Score multiple candidates for each user in the batch.
+    def _handle_multiple_candidates(self, inputs):
+        """Handle multiple candidate scoring with sigmoid scores."""
+        # Extract the inputs - handle both user_ids and user_indices keys
+        history_tokens = inputs["hist_tokens"]
+        user_ids = inputs.get("user_ids", inputs.get("user_indices"))
+        candidate_tokens = inputs["cand_tokens"]
 
-        Args:
-            inputs (dict): Dictionary containing:
-                - 'history_tokens': User history tokens, shape (batch_size, history_len, title_len)
-                - 'user_ids': User IDs for each batch item, shape (batch_size, 1)
-                - 'cand_tokens': Candidate news tokens, shape (batch_size, num_candidates, title_len)
-                - Category/subcategory inputs if category encoder is enabled
-
-        Returns:
-            keras.KerasTensor: Scores for all candidates
-                Shape: (batch_size, num_candidates)
-        """
-        history_tokens_batch = inputs["history_tokens"]
-        user_ids_batch = inputs["user_ids"]
-        candidates_batch = inputs["cand_tokens"]
-
-        # Handle topic encoder inputs if enabled
-        if self.use_cat_subcat_encoder and self.num_categories > 0 and self.num_subcategories > 0:
+        # Check if we have category/subcategory data
+        if "hist_category" in inputs and "hist_subcategory" in inputs:
             # Concatenate history inputs: title + category + subcategory
-            hist_category = inputs.get("history_category")
-            hist_subcategory = inputs.get("history_subcategory")
-            if hist_category is not None and hist_subcategory is not None:
-                history_tokens_batch = keras.ops.concatenate(
-                    [history_tokens_batch, hist_category, hist_subcategory], axis=-1
-                )
+            hist_category = ops.expand_dims(inputs["hist_category"], axis=-1)
+            hist_subcategory = ops.expand_dims(inputs["hist_subcategory"], axis=-1)
+            history_tokens = ops.concatenate(
+                [history_tokens, hist_category, hist_subcategory], axis=-1
+            )
 
             # Concatenate candidate inputs: title + category + subcategory
-            cand_category = inputs.get("cand_category")
-            cand_subcategory = inputs.get("cand_subcategory")
-            if cand_category is not None and cand_subcategory is not None:
-                candidates_batch = keras.ops.concatenate(
-                    [candidates_batch, cand_category, cand_subcategory], axis=-1
-                )
+            cand_category = ops.expand_dims(inputs["cand_category"], axis=-1)
+            cand_subcategory = ops.expand_dims(inputs["cand_subcategory"], axis=-1)
+            candidate_tokens = ops.concatenate(
+                [candidate_tokens, cand_category, cand_subcategory], axis=-1
+            )
 
-        batch_size = keras.ops.shape(history_tokens_batch)[0]
-        num_candidates = keras.ops.shape(candidates_batch)[1]
-
-        all_scores = []
-
-        # Process each item in the batch
-        for i in range(batch_size):
-            # Get history and user ID for current item
-            current_history_tokens = keras.ops.expand_dims(history_tokens_batch[i], 0)
-            current_user_ids = keras.ops.expand_dims(user_ids_batch[i], 0)
-
-            # Score each candidate against this history
-            candidate_scores = []
-            for j in range(num_candidates):
-                current_candidate = keras.ops.expand_dims(candidates_batch[i, j], 0)
-                score = self.scorer_model(
-                    [current_history_tokens, current_user_ids, current_candidate], training=False
-                )
-                candidate_scores.append(score)
-
-            # Combine scores for all candidates of this item
-            item_scores = keras.ops.concatenate(candidate_scores, axis=1)
-            all_scores.append(item_scores)
-
-        # Combine scores for all items in batch
-        return keras.ops.concatenate(all_scores, axis=0)
+        return self.scorer.score_multiple_candidates(
+            history_tokens,
+            user_ids,
+            candidate_tokens,
+            training=False
+        )
 
     def get_config(self):
-        """Returns the configuration of the LSTUR model for serialization.
-
-        Returns:
-            dict: Model configuration including all hyperparameters
-        """
-        config = super().get_config()
-        config.update(
-            {
-                "embedding_size": self.embedding_size,
-                "cnn_filter_num": self.cnn_filter_num,
-                "cnn_kernel_size": self.cnn_kernel_size,
-                "attention_hidden_dim": self.attention_hidden_dim,
-                "dropout_rate": self.dropout_rate,
-                "cnn_activation": self.cnn_activation,
-                "max_title_length": self.max_title_length,
-                "max_history_length": self.max_history_length,
-                "max_impressions_length": self.max_impressions_length,
-                "num_users": self.num_users,
-                "user_representation_type": self.user_representation_type,
-                "user_combination_type": self.user_combination_type,
-                "category_embedding_dim": self.category_embedding_dim,
-                "subcategory_embedding_dim": self.subcategory_embedding_dim,
-                "use_cat_subcat_encoder": self.use_cat_subcat_encoder,
-                "seed": self.seed,
-                "vocab_size": self.vocab_size,
-            }
-        )
-        return config
+        """Returns the configuration of the LSTUR model for serialization."""
+        base_config = super().get_config()
+        base_config.update({
+            "num_users": self.num_users,
+            "embedding_size": self.config.embedding_size,
+            "cnn_filter_num": self.config.cnn_filter_num,
+            "cnn_kernel_size": self.config.cnn_kernel_size,
+            "cnn_activation": self.config.cnn_activation,
+            "attention_hidden_dim": self.config.attention_hidden_dim,
+            "gru_unit": self.config.gru_unit,
+            "type": self.config.type,
+            "dropout_rate": self.config.dropout_rate,
+            "seed": self.config.seed,
+            "max_title_length": self.config.max_title_length,
+            "max_history_length": self.config.max_history_length,
+            "max_impressions_length": self.config.max_impressions_length,
+            "process_user_id": self.config.process_user_id,
+            "use_category": self.config.use_category,
+            "use_subcategory": self.config.use_subcategory,
+            "category_embedding_dim": self.config.category_embedding_dim,
+            "subcategory_embedding_dim": self.config.subcategory_embedding_dim,
+        })
+        return base_config
