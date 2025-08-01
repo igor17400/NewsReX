@@ -59,7 +59,7 @@ train:
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "NewsReX"
   experiment_name: "naml_mind_small_bs${train.batch_size}"
   log_every_n_steps: 100
