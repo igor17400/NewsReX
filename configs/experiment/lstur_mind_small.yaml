@@ -35,11 +35,11 @@ model:
   embedding_size: 300
   category_embedding_dim: 100
   subcategory_embedding_dim: 100
-  cnn_filter_num: 300
+  cnn_filter_num: 400
   cnn_kernel_size: 3
   cnn_activation: "relu"
   attention_hidden_dim: 200
-  gru_unit: 300
+  gru_unit: 400
   type: "ini" # User encoder type: "ini" (initial state) or "con" (concatenation)
   dropout_rate: 0.2
   num_users: 94057 # Total number of users in the datasets (train + validation + test)
