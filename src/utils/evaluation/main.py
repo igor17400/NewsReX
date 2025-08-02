@@ -3,8 +3,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 import keras
-from keras import ops
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import Progress
 
@@ -12,8 +11,6 @@ from src.utils.metrics.functions import NewsRecommenderMetrics
 from ..io.saving import save_predictions_to_file_fn, get_output_run_dir
 from ..training.engine import test_step_fn
 from ..io.logging import log_metrics_to_console_fn
-from ..io.model_config import load_model_config, verify_model_compatibility
-from ..model.model import initialize_model_and_dataset
 
 console = Console()
 
