@@ -191,11 +191,13 @@ class NRMSScorer(keras.Model):
         self.news_encoder = news_encoder
         self.user_encoder = user_encoder
 
-        # Store TimeDistributed layer for candidate processing
-        self.candidate_encoder = layers.TimeDistributed(
-            self.news_encoder, name="td_candidate_news_encoder"
+        # Store TimeDistributed layers for candidate processing
+        self.candidate_encoder_train = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_candidates"
         )
-
+        self.candidate_encoder_eval = layers.TimeDistributed(
+            self.news_encoder, name="td_news_encoder_eval"
+        )
     def build(self, input_shape):
         super().build(input_shape)
 
@@ -204,7 +206,7 @@ class NRMSScorer(keras.Model):
         user_repr = self.user_encoder(history_tokens, training=training)
 
         # Process candidates using stored TimeDistributed layer
-        candidate_repr = self.candidate_encoder(candidate_tokens, training=training)
+        candidate_repr = self.candidate_encoder_train(candidate_tokens, training=training)
 
         # Calculate scores using dot product
         scores = layers.Dot(axes=-1, name="dot_product_train")([candidate_repr, user_repr])
@@ -241,7 +243,7 @@ class NRMSScorer(keras.Model):
         user_repr = self.user_encoder(history_tokens, training=training)  # (batch_size, embedding_dim)
 
         # Process all candidates using TimeDistributed layer
-        candidate_repr = self.candidate_encoder(candidate_tokens,
+        candidate_repr = self.candidate_encoder_eval(candidate_tokens,
                                                 training=training)  # (batch_size, num_candidates, embedding_dim)
 
         # Vectorized dot product: expand user_repr to match candidate dimensions
