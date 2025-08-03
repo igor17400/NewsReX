@@ -1,10 +1,3 @@
-# Copyright (c) Recommenders contributors.
-# Licensed under the MIT License.
-#
-# This code has been updated to use the modern Keras 3 API.
-# The SelfAttention layer has been refactored to use the built-in
-# keras.layers.MultiHeadAttention for better performance and maintainability.
-
 import keras
 from keras import layers
 from keras import ops
@@ -159,3 +152,326 @@ class OverwriteMasking(layers.Layer):
 
     def compute_output_shape(self, input_shape):
         return input_shape[0]
+
+
+class GraphSAGELayer(layers.Layer):
+    """GraphSAGE layer implementation for Keras 3.
+    
+    This layer implements the GraphSAGE algorithm for graph neural networks,
+    adapted for use with Keras 3 and JAX backend.
+    
+    Args:
+        units: Output dimension
+        num_layers: Number of GraphSAGE layers to stack
+        aggregator: Type of aggregation ('mean', 'max', 'sum')
+        dropout_rate: Dropout rate
+        activation: Activation function
+        seed: Random seed
+    """
+
+    def __init__(
+            self,
+            units,
+            num_layers=1,
+            aggregator='mean',
+            dropout_rate=0.0,
+            activation='relu',
+            seed=42,
+            **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.units = units
+        self.num_layers = num_layers
+        self.aggregator = aggregator
+        self.dropout_rate = dropout_rate
+        self.activation = keras.activations.get(activation)
+        self.seed = seed
+
+    def build(self, input_shape):
+        """Build the layer weights."""
+        # Input shape: (node_features_shape, edge_index_shape)
+        node_features_shape = input_shape[0]
+        input_dim = node_features_shape[-1]
+
+        # Create weights for each GraphSAGE layer
+        self.W_self = []
+        self.W_neigh = []
+        self.bias = []
+
+        for i in range(self.num_layers):
+            # Weight matrix for self features
+            self.W_self.append(
+                self.add_weight(
+                    name=f'W_self_{i}',
+                    shape=(input_dim if i == 0 else self.units, self.units),
+                    initializer=keras.initializers.GlorotUniform(seed=self.seed),
+                    trainable=True
+                )
+            )
+
+            # Weight matrix for neighbor features
+            self.W_neigh.append(
+                self.add_weight(
+                    name=f'W_neigh_{i}',
+                    shape=(input_dim if i == 0 else self.units, self.units),
+                    initializer=keras.initializers.GlorotUniform(seed=self.seed),
+                    trainable=True
+                )
+            )
+
+            # Bias
+            self.bias.append(
+                self.add_weight(
+                    name=f'bias_{i}',
+                    shape=(self.units,),
+                    initializer=keras.initializers.Zeros(),
+                    trainable=True
+                )
+            )
+
+        self.dropout = layers.Dropout(self.dropout_rate, seed=self.seed)
+        super().build(input_shape)
+
+    def aggregate_neighbors(self, node_features, adjacency_matrix):
+        """Aggregate neighbor features based on the specified method."""
+        # adjacency_matrix shape: (batch_size, num_nodes, num_nodes)
+        # node_features shape: (batch_size, num_nodes, feature_dim)
+
+        if self.aggregator == 'mean':
+            # Mean aggregation
+            neighbor_sum = ops.matmul(adjacency_matrix, node_features)
+            degree = ops.sum(adjacency_matrix, axis=-1, keepdims=True)
+            degree = ops.maximum(degree, 1.0)  # Avoid division by zero
+            neighbor_features = neighbor_sum / degree
+        elif self.aggregator == 'max':
+            # Max aggregation - expand and use maximum
+            expanded_features = ops.expand_dims(node_features, axis=1)
+            expanded_adj = ops.expand_dims(adjacency_matrix, axis=-1)
+            masked_features = expanded_features * expanded_adj
+            neighbor_features = ops.max(masked_features, axis=2)
+        elif self.aggregator == 'sum':
+            # Sum aggregation
+            neighbor_features = ops.matmul(adjacency_matrix, node_features)
+        else:
+            raise ValueError(f"Unknown aggregator: {self.aggregator}")
+
+        return neighbor_features
+
+    def call(self, inputs, training=None):
+        """Forward pass of GraphSAGE layer.
+        
+        Args:
+            inputs: Tuple of (node_features, adjacency_matrix)
+                - node_features: (batch_size, num_nodes, feature_dim)
+                - adjacency_matrix: (batch_size, num_nodes, num_nodes)
+            training: Whether in training mode
+            
+        Returns:
+            Updated node features: (batch_size, num_nodes, units)
+        """
+        node_features, adjacency_matrix = inputs
+        h = node_features
+
+        for i in range(self.num_layers):
+            # Aggregate neighbor features
+            h_neigh = self.aggregate_neighbors(h, adjacency_matrix)
+
+            # Transform self and neighbor features
+            h_self = ops.matmul(h, self.W_self[i])
+            h_neigh = ops.matmul(h_neigh, self.W_neigh[i])
+
+            # Combine self and neighbor features
+            h = h_self + h_neigh + self.bias[i]
+
+            # Apply activation (except for last layer)
+            if i < self.num_layers - 1 or self.num_layers == 1:
+                h = self.activation(h)
+                h = self.dropout(h, training=training)
+
+        return h
+
+    def compute_output_shape(self, input_shape):
+        node_features_shape = input_shape[0]
+        return (node_features_shape[0], node_features_shape[1], self.units)
+
+
+class MultiHeadAttentionBlock(layers.Layer):
+    """Multi-head attention block for set-based operations.
+    
+    This implements the MAB (Multihead Attention Block) used in Set Transformer.
+    
+    Args:
+        dim_out: Output dimension
+        num_heads: Number of attention heads
+        use_layer_norm: Whether to use layer normalization
+    """
+
+    def __init__(self, dim_out, num_heads, use_layer_norm=True, seed=42, **kwargs):
+        super().__init__(**kwargs)
+        self.dim_out = dim_out
+        self.num_heads = num_heads
+        self.use_layer_norm = use_layer_norm
+        self.seed = seed
+
+    def build(self, input_shape):
+        # Expecting input_shape to be a tuple of (Q_shape, K_shape)
+        if isinstance(input_shape, tuple) and len(input_shape) == 2:
+            q_shape, k_shape = input_shape
+        else:
+            # Self-attention case
+            q_shape = k_shape = input_shape
+
+        self.fc_q = layers.Dense(self.dim_out, use_bias=True,
+                                 kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed))
+        self.fc_k = layers.Dense(self.dim_out, use_bias=True,
+                                 kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed))
+        self.fc_v = layers.Dense(self.dim_out, use_bias=True,
+                                 kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed))
+        self.fc_o = layers.Dense(self.dim_out, use_bias=True,
+                                 kernel_initializer=keras.initializers.GlorotUniform(seed=self.seed))
+
+        if self.use_layer_norm:
+            self.ln0 = layers.LayerNormalization()
+            self.ln1 = layers.LayerNormalization()
+
+        self.dropout = layers.Dropout(0.1)
+        super().build(input_shape)
+
+    def call(self, inputs, training=None):
+        """Forward pass.
+        
+        Args:
+            inputs: Either a single tensor for self-attention or tuple (Q, K) for cross-attention
+            training: Whether in training mode
+            
+        Returns:
+            Attention output with same shape as Q
+        """
+        if isinstance(inputs, tuple):
+            Q, K = inputs
+        else:
+            Q = K = inputs
+
+        # Linear projections
+        Q_proj = self.fc_q(Q)
+        K_proj = self.fc_k(K)
+        V_proj = self.fc_v(K)
+
+        # Reshape for multi-head attention
+        batch_size = ops.shape(Q)[0]
+        seq_len_q = ops.shape(Q)[1]
+        seq_len_k = ops.shape(K)[1]
+
+        head_dim = self.dim_out // self.num_heads
+
+        Q_proj = ops.reshape(Q_proj, (batch_size, seq_len_q, self.num_heads, head_dim))
+        K_proj = ops.reshape(K_proj, (batch_size, seq_len_k, self.num_heads, head_dim))
+        V_proj = ops.reshape(V_proj, (batch_size, seq_len_k, self.num_heads, head_dim))
+
+        # Transpose for attention computation
+        Q_proj = ops.transpose(Q_proj, (0, 2, 1, 3))  # (batch, heads, seq_q, head_dim)
+        K_proj = ops.transpose(K_proj, (0, 2, 1, 3))  # (batch, heads, seq_k, head_dim)
+        V_proj = ops.transpose(V_proj, (0, 2, 1, 3))  # (batch, heads, seq_k, head_dim)
+
+        # Compute attention scores
+        scores = ops.matmul(Q_proj, ops.transpose(K_proj, (0, 1, 3, 2)))
+        scores = scores / ops.sqrt(ops.cast(head_dim, scores.dtype))
+
+        # Apply softmax
+        attention_weights = ops.softmax(scores, axis=-1)
+        attention_weights = self.dropout(attention_weights, training=training)
+
+        # Apply attention to values
+        attention_output = ops.matmul(attention_weights, V_proj)
+
+        # Reshape back
+        attention_output = ops.transpose(attention_output, (0, 2, 1, 3))
+        attention_output = ops.reshape(attention_output, (batch_size, seq_len_q, self.dim_out))
+
+        # Output projection and residual connection
+        O = self.fc_o(attention_output)
+        O = self.dropout(O, training=training)
+
+        # Add residual connection
+        O = O + Q
+
+        # Layer normalization
+        if self.use_layer_norm:
+            O = self.ln0(O)
+
+        # Feed-forward and another residual
+        O_ff = self.fc_o(ops.relu(O))
+        O = O + O_ff
+
+        if self.use_layer_norm:
+            O = self.ln1(O)
+
+        return O
+
+    def compute_output_shape(self, input_shape):
+        if isinstance(input_shape, tuple):
+            return input_shape[0][:-1] + (self.dim_out,)
+        return input_shape[:-1] + (self.dim_out,)
+
+
+class InducedSetAttentionBlock(layers.Layer):
+    """Induced Set Attention Block (ISAB) for set-based operations.
+    
+    This implements the ISAB layer from the Set Transformer paper, which uses
+    inducing points to reduce computational complexity.
+    
+    Args:
+        dim_out: Output dimension
+        num_heads: Number of attention heads
+        num_inducing_points: Number of inducing points
+        use_layer_norm: Whether to use layer normalization
+    """
+
+    def __init__(self, dim_out, num_heads, num_inducing_points, use_layer_norm=True, seed=42, **kwargs):
+        super().__init__(**kwargs)
+        self.dim_out = dim_out
+        self.num_heads = num_heads
+        self.num_inducing_points = num_inducing_points
+        self.use_layer_norm = use_layer_norm
+        self.seed = seed
+
+    def build(self, input_shape):
+        # Initialize inducing points
+        self.inducing_points = self.add_weight(
+            name='inducing_points',
+            shape=(1, self.num_inducing_points, self.dim_out),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
+
+        # Create two MAB blocks
+        self.mab0 = MultiHeadAttentionBlock(self.dim_out, self.num_heads, self.use_layer_norm, self.seed)
+        self.mab1 = MultiHeadAttentionBlock(self.dim_out, self.num_heads, self.use_layer_norm, self.seed)
+
+        super().build(input_shape)
+
+    def call(self, inputs, training=None):
+        """Forward pass of ISAB.
+        
+        Args:
+            inputs: Input tensor of shape (batch_size, seq_len, dim)
+            training: Whether in training mode
+            
+        Returns:
+            Output tensor of shape (batch_size, seq_len, dim_out)
+        """
+        batch_size = ops.shape(inputs)[0]
+
+        # Repeat inducing points for batch
+        I = ops.repeat(self.inducing_points, batch_size, axis=0)
+
+        # First MAB: attending from inducing points to input
+        H = self.mab0((I, inputs), training=training)
+
+        # Second MAB: attending from input to inducing points
+        output = self.mab1((inputs, H), training=training)
+
+        return output
+
+    def compute_output_shape(self, input_shape):
+        return input_shape[:-1] + (self.dim_out,)
