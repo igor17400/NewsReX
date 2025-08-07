@@ -5,7 +5,7 @@ import numpy as np
 import keras
 from keras import layers, ops
 
-from .layers import AdditiveAttentionLayer, GraphSAGELayer, InducedSetAttentionBlock
+from .layers import AdditiveAttentionLayer, GraphSAGELayer, InducedSetAttentionBlock, MultiHeadAttentionBlock
 from .base import BaseModel
 
 
@@ -24,17 +24,17 @@ class CROWNConfig:
     attention_dim: int = 200
 
     # Intent disentanglement
-    intent_num: int = 4  # Number of intents (k)
-    alpha: float = 0.5  # Weight for auxiliary loss
+    intent_num: int = 3  # Number of intents (k)
+    alpha: float = 0.3  # Weight for auxiliary loss
 
-    # Transformer parameters
-    num_heads: int = 8
-    head_dim: int = 40  # 8 * 40 = 320 > 300d embeddings
+    # MAB parameters
+    num_heads: int = 12  # 300 ÷ 12 = 25 (evenly divisible)
+    head_dim: int = 25  # 12 × 25 = 300 = embedding_size
     feedforward_dim: int = 512
     num_layers: int = 2
 
     # ISAB parameters
-    isab_num_heads: int = 4
+    isab_num_heads: int = 12  # Match MAB heads for consistency
     isab_num_inducing_points: int = 4
 
     # GraphSAGE parameters
@@ -52,12 +52,13 @@ class CROWNConfig:
 
 
 class PositionalEncoding(layers.Layer):
-    """Positional encoding layer for transformer models."""
+    """Positional encoding layer for MAB models."""
 
     def __init__(self, dropout_rate=0.1, max_len=5000, **kwargs):
         super().__init__(**kwargs)
         self.dropout = layers.Dropout(dropout_rate)
         self.max_len = max_len
+        self.supports_masking = True
 
     def build(self, input_shape):
         d_model = input_shape[-1]
@@ -89,6 +90,10 @@ class PositionalEncoding(layers.Layer):
         x = x + self.pe[:, :seq_len, :]
         return self.dropout(x, training=training)
 
+    def compute_mask(self, inputs, mask=None):
+        """Pass through the mask unchanged."""
+        return mask
+
 
 class CategoryPredictor(layers.Layer):
     """Category prediction layer for auxiliary task."""
@@ -117,7 +122,7 @@ class CategoryPredictor(layers.Layer):
         return self.fc(inputs)
 
 
-class CROWNNewsEncoder(keras.Model):
+class NewsEncoder(keras.Model):
     """News encoder component for CROWN model.
     
     Implements category-guided intent disentanglement and consistency-based
@@ -126,7 +131,7 @@ class CROWNNewsEncoder(keras.Model):
 
     def __init__(self, config: CROWNConfig, embedding_layer: layers.Embedding,
                  category_embedding: layers.Embedding, subcategory_embedding: layers.Embedding,
-                 name: str = "crown_news_encoder"):
+                 name: str = "news_encoder"):
         super().__init__(name=name)
         self.config = config
         self.embedding_layer = embedding_layer
@@ -145,9 +150,9 @@ class CROWNNewsEncoder(keras.Model):
         self.title_pos_encoder = PositionalEncoding(config.dropout_rate, config.max_title_length)
         self.body_pos_encoder = PositionalEncoding(config.dropout_rate, config.max_abstract_length)
 
-        # Transformer encoders
-        self.title_transformer = self._build_transformer_encoder("title")
-        self.body_transformer = self._build_transformer_encoder("body")
+        # MAB encoders
+        self.title_mab = self._build_mab_encoder("title")
+        self.body_mab = self._build_mab_encoder("body")
 
         # ISAB encoder (optional, currently commented out in original)
         self.isab = InducedSetAttentionBlock(
@@ -192,8 +197,8 @@ class CROWNNewsEncoder(keras.Model):
         # Category predictor for auxiliary task - will be set in _create_components
         self.category_predictor = None
 
-        # For auxiliary loss tracking
-        self.auxiliary_loss = None
+    def build(self, input_shape):
+        super().build(input_shape)
 
     def compute_output_shape(self, input_shape):
         """Compute the output shape of the news encoder.
@@ -206,48 +211,23 @@ class CROWNNewsEncoder(keras.Model):
         """
         return (input_shape[0], self.news_embedding_dim)
 
-    def _build_transformer_encoder(self, name_prefix):
-        """Build a transformer encoder stack using custom implementation."""
+    def _build_mab_encoder(self, name_prefix):
+        """Build an encoder using single MultiHeadAttentionBlock from layers.py.
+        
+        According to the CROWN paper, we use a single MAB (Multi-Head Attention Block):
+        MAB(X,Y) = LayerNorm(H + FeedForward(H)) where H = LayerNorm(X + Multihead(X,Y,Y))
+        """
 
-        class TransformerBlock(layers.Layer):
-            def __init__(self, embed_dim, num_heads, ff_dim, dropout_rate, **kwargs):
-                super().__init__(**kwargs)
-                self.att = layers.MultiHeadAttention(
-                    num_heads=num_heads,
-                    key_dim=embed_dim // num_heads,
-                    dropout=dropout_rate
-                )
-                self.ffn = keras.Sequential([
-                    layers.Dense(ff_dim, activation="relu"),
-                    layers.Dense(embed_dim),
-                ])
-                self.layernorm1 = layers.LayerNormalization(epsilon=1e-6)
-                self.layernorm2 = layers.LayerNormalization(epsilon=1e-6)
-                self.dropout1 = layers.Dropout(dropout_rate)
-                self.dropout2 = layers.Dropout(dropout_rate)
+        # Create single MAB block as per CROWN paper
+        mab_block = MultiHeadAttentionBlock(
+            dim_out=self.config.embedding_size,
+            num_heads=self.config.num_heads,
+            use_layer_norm=True,
+            seed=self.config.seed,
+            name=f'{name_prefix}_mab_block'
+        )
 
-            def call(self, inputs, training=None, mask=None):
-                attn_output = self.att(inputs, inputs, training=training)
-                attn_output = self.dropout1(attn_output, training=training)
-                out1 = self.layernorm1(inputs + attn_output)
-                ffn_output = self.ffn(out1)
-                ffn_output = self.dropout2(ffn_output, training=training)
-                return self.layernorm2(out1 + ffn_output)
-
-        # Create transformer encoder stack
-        transformer_blocks = []
-        for i in range(self.config.num_layers):
-            transformer_blocks.append(
-                TransformerBlock(
-                    embed_dim=self.config.embedding_size,
-                    num_heads=self.config.num_heads,
-                    ff_dim=self.config.feedforward_dim,
-                    dropout_rate=self.config.dropout_rate,
-                    name=f'{name_prefix}_transformer_block_{i}'
-                )
-            )
-
-        return keras.Sequential(transformer_blocks, name=f'{name_prefix}_transformer')
+        return mab_block
 
     def k_intent_disentangle(self, news_embedding):
         """Apply k-FC layers for k-intent disentanglement.
@@ -309,55 +289,37 @@ class CROWNNewsEncoder(keras.Model):
             News representations (batch_size, news_embedding_dim)
         """
         # Split the concatenated input: [title, abstract, category, subcategory] 
-        # Calculate actual dimensions from input shape
-        total_features = ops.shape(inputs)[-1]
-        actual_abstract_length = total_features - self.config.max_title_length - 2  # 2 for category + subcategory
-        
-        title_text = inputs[:, :self.config.max_title_length]
-        content_text_raw = inputs[:, self.config.max_title_length:self.config.max_title_length + actual_abstract_length]
-        category = inputs[:, self.config.max_title_length + actual_abstract_length:self.config.max_title_length + actual_abstract_length + 1]
-        subcategory = inputs[:, self.config.max_title_length + actual_abstract_length + 1:]
+        # Use fixed dimensions to avoid dynamic conditions that break JAX tracing
+        title_tokens = inputs[:, :self.config.max_title_length]
+        abstract_tokens = inputs[
+            :, self.config.max_title_length:self.config.max_title_length + self.config.max_abstract_length]
+        category_id = inputs[
+            :, self.config.max_title_length + self.config.max_abstract_length:self.config.max_title_length + self.config.max_abstract_length + 1]
+        subcategory_id = inputs[:, self.config.max_title_length + self.config.max_abstract_length + 1:]
 
-        # Pad or truncate content_text to match config.max_abstract_length
-        if actual_abstract_length < self.config.max_abstract_length:
-            # Pad with zeros
-            padding_size = self.config.max_abstract_length - actual_abstract_length
-            batch_size = ops.shape(content_text_raw)[0]
-            padding = ops.zeros((batch_size, padding_size), dtype=content_text_raw.dtype)
-            content_text = ops.concatenate([content_text_raw, padding], axis=1)
-        elif actual_abstract_length > self.config.max_abstract_length:
-            # Truncate
-            content_text = content_text_raw[:, :self.config.max_abstract_length]
-        else:
-            content_text = content_text_raw
-
-        # Squeeze category and subcategory to remove extra dimension
-        category = ops.squeeze(category, axis=-1)
-        subcategory = ops.squeeze(subcategory, axis=-1)
-
-        # Cast to int32 if needed
-        category = ops.cast(category, dtype='int32')
-        subcategory = ops.cast(subcategory, dtype='int32')
+        # Squeeze dimension
+        category_id = ops.squeeze(category_id, axis=-1)
+        subcategory_id = ops.squeeze(subcategory_id, axis=-1)
 
         # Word embeddings
-        title_w = self.dropout(self.embedding_layer(title_text), training=training)
-        body_w = self.dropout(self.embedding_layer(content_text), training=training)
+        title_w = self.dropout(self.embedding_layer(title_tokens), training=training)
+        body_w = self.dropout(self.embedding_layer(abstract_tokens), training=training)
 
         # Positional encoding
         title_p = self.title_pos_encoder(title_w, training=training)
         body_p = self.body_pos_encoder(body_w, training=training)
 
-        # Transformer encoding
-        title_t = self.title_transformer(title_p, training=training)
-        body_t = self.body_transformer(body_p, training=training)
+        # MAB encoding
+        title_t = self.title_mab(title_p, training=training)
+        body_t = self.body_mab(body_p, training=training)
 
         # Mean pooling
         title_embedding = ops.mean(title_t, axis=1)
         body_embedding = ops.mean(body_t, axis=1)
 
         # Category-aware intent disentanglement
-        cat_embed = self.category_embedding(category)
-        subcat_embed = self.subcategory_embedding(subcategory)
+        cat_embed = self.category_embedding(category_id)
+        subcat_embed = self.subcategory_embedding(subcategory_id)
         category_concat = ops.concatenate([cat_embed, subcat_embed], axis=1)
         category_representation = self.category_affine(category_concat)
 
@@ -374,15 +336,20 @@ class CROWNNewsEncoder(keras.Model):
         body_intent_embedding = self.body_intent_attention(body_k_intents)
 
         # Category predictor (auxiliary task)
-        if training and self.category_predictor is not None:
+        # Always compute the auxiliary loss but only add it during training
+        # This avoids JAX tracing issues with conditional logic
+        if self.category_predictor is not None:
             category_logits = self.category_predictor(title_intent_embedding)
-            category_one_hot = ops.one_hot(category, self.category_predictor.category_num)
+            category_one_hot = ops.one_hot(category_id, self.category_predictor.category_num)
             category_loss = ops.categorical_crossentropy(
                 category_one_hot,
                 category_logits,
                 from_logits=True
             )
-            self.auxiliary_loss = ops.mean(category_loss) * self.config.alpha
+            auxiliary_loss = ops.mean(category_loss) * self.config.alpha
+
+            # Always add the loss - Keras will handle it appropriately based on training mode
+            self.add_loss(auxiliary_loss)
 
         # Title-body similarity computation
         similarity = self.similarity_compute(title_intent_embedding, body_intent_embedding)
@@ -404,14 +371,14 @@ class CROWNNewsEncoder(keras.Model):
         return news_representation
 
 
-class CROWNUserEncoder(keras.Model):
+class UserEncoder(keras.Model):
     """User encoder component for CROWN model.
     
     Implements GNN-enhanced hybrid user representation using GraphSAGE.
     """
 
-    def __init__(self, config: CROWNConfig, news_encoder: CROWNNewsEncoder,
-                 name: str = "crown_user_encoder"):
+    def __init__(self, config: CROWNConfig, news_encoder: NewsEncoder,
+                 name: str = "user_encoder"):
         super().__init__(name=name)
         self.config = config
         self.news_encoder = news_encoder
@@ -431,11 +398,11 @@ class CROWNUserEncoder(keras.Model):
             seed=config.seed
         )
 
-        # User node embedding (trainable parameter)
-        # Note: In actual implementation, this should be dynamically sized based on batch
-        self.user_node_embedding = self.add_weight(
-            name='user_node_embedding',
-            shape=(1, self.news_embedding_dim),
+        # User node embeddings - one per batch item
+        # Note: The reference uses batch_size in the parameter, but we'll make it dynamic
+        self.user_node_embedding_init = self.add_weight(
+            name='user_node_embedding_init',
+            shape=(self.news_embedding_dim,),
             initializer='zeros',
             trainable=True
         )
@@ -447,8 +414,14 @@ class CROWNUserEncoder(keras.Model):
         # Other layers
         self.dropout = layers.Dropout(config.dropout_rate, seed=config.seed)
 
+    def build(self, input_shape):
+        super().build(input_shape)
+
     def create_bipartite_graph(self, user_history_mask, batch_size):
         """Create adjacency matrix for user-news bipartite graph.
+        
+        Creates a simpler bipartite graph where each user (single node per batch)
+        connects to their valid history nodes. This is more memory efficient.
         
         Args:
             user_history_mask: (batch_size, max_history_num)
@@ -458,25 +431,27 @@ class CROWNUserEncoder(keras.Model):
             adjacency_matrix: (batch_size, max_history_num + 1, max_history_num + 1)
         """
         max_history_num = ops.shape(user_history_mask)[1]
-        total_nodes = max_history_num + 1  # history nodes + user node
 
-        # Create adjacency matrix
-        adjacency = ops.zeros((batch_size, total_nodes, total_nodes))
-
-        # Connect user node (last node) to all history nodes based on mask
-        # User node is at index max_history_num
-        user_node_idx = max_history_num
-
-        # Create connections from user to history nodes
+        # Convert mask to float
         user_history_mask_float = ops.cast(user_history_mask, dtype='float32')
 
-        # Update adjacency matrix
-        # adjacency[:, user_node_idx, :max_history_num] = user_history_mask_float
-        # adjacency[:, :max_history_num, user_node_idx] = user_history_mask_float
+        # Create adjacency matrix parts
+        # Top-left: history-to-history (no connections)
+        hist_to_hist = ops.zeros((batch_size, max_history_num, max_history_num))
 
-        # For now, let's use a simpler approach with full connectivity
-        # Perhaps it's a good idea to use sparse matrix handling
-        adjacency = ops.ones((batch_size, total_nodes, total_nodes))
+        # Top-right: history-to-user connections based on mask
+        hist_to_user = ops.expand_dims(user_history_mask_float, axis=-1)
+
+        # Bottom-left: user-to-history connections based on mask
+        user_to_hist = ops.expand_dims(user_history_mask_float, axis=1)
+
+        # Bottom-right: user-to-user (no self-loop)
+        user_to_user = ops.zeros((batch_size, 1, 1))
+
+        # Combine all parts
+        top_half = ops.concatenate([hist_to_hist, hist_to_user], axis=2)
+        bottom_half = ops.concatenate([user_to_hist, user_to_user], axis=2)
+        adjacency = ops.concatenate([top_half, bottom_half], axis=1)
 
         return adjacency
 
@@ -484,18 +459,14 @@ class CROWNUserEncoder(keras.Model):
         """Forward pass for user encoding.
         
         Args:
-            inputs: Tuple of (history_inputs, candidate_news_representation)
-                - history_inputs: Concatenated history tensor (batch_size, history_length, feature_size)
-                - candidate_news_representation: (batch_size, news_num, news_embedding_dim)
+            inputs: Concatenated history tensor (batch_size, history_length, feature_size)
             training: Whether in training mode
             
         Returns:
-            User representations (batch_size, news_num, news_embedding_dim)
+            User representations (batch_size, news_embedding_dim)
         """
-        history_inputs, candidate_news_representation = inputs
-
-        batch_size = ops.shape(candidate_news_representation)[0]
-        news_num = ops.shape(candidate_news_representation)[1]
+        history_inputs = inputs
+        batch_size = ops.shape(history_inputs)[0]
 
         # Process all history items using TimeDistributed layer
         history_embedding = self.time_distributed(history_inputs, training=training)
@@ -506,14 +477,16 @@ class CROWNUserEncoder(keras.Model):
         title_tokens = history_inputs[:, :, :self.config.max_title_length]
         history_mask = ops.any(ops.not_equal(title_tokens, 0), axis=-1)
 
-        # Add user node embedding
-        user_node_expanded = ops.repeat(self.user_node_embedding, batch_size, axis=0)
-        user_node_expanded = ops.expand_dims(user_node_expanded, axis=1)
+        # Create user node embeddings - one per batch item
+        user_node_embeddings = ops.expand_dims(self.user_node_embedding_init, axis=0)
+        user_node_embeddings = ops.repeat(user_node_embeddings, batch_size, axis=0)
+        user_node_embeddings = ops.expand_dims(user_node_embeddings, axis=1)
 
-        # Concatenate history embeddings with user node
+        # Concatenate history embeddings with user node embeddings
+        # Shape: [batch_size, max_history_num + 1, news_embedding_dim]
         all_embeddings = ops.concatenate([
             history_embedding,
-            self.dropout(user_node_expanded, training=training)
+            self.dropout(user_node_embeddings, training=training)
         ], axis=1)
 
         # Create adjacency matrix for bipartite graph
@@ -526,49 +499,15 @@ class CROWNUserEncoder(keras.Model):
         max_history_num = ops.shape(history_embedding)[1]
         gcn_features = gcn_features[:, :max_history_num, :]
 
-        # Expand for multiple candidates
-        gcn_features_expanded = ops.expand_dims(gcn_features, axis=1)
-        gcn_features_expanded = ops.repeat(gcn_features_expanded, news_num, axis=1)
+        # Apply mask and mean pooling over history to get user representation
+        mask_expanded = ops.expand_dims(ops.cast(history_mask, dtype='float32'), axis=-1)
+        masked_gcn = gcn_features * mask_expanded
 
-        # Attention mechanism
-        batch_news_num = batch_size * news_num
-
-        # Reshape for attention computation
-        gcn_features_reshaped = ops.reshape(
-            gcn_features_expanded,
-            (batch_news_num, max_history_num, self.news_embedding_dim)
-        )
-        candidate_reshaped = ops.reshape(
-            candidate_news_representation,
-            (batch_news_num, self.news_embedding_dim)
-        )
-
-        # Compute attention
-        K = self.K(gcn_features_reshaped)
-        Q = self.Q(candidate_reshaped)
-        Q_expanded = ops.expand_dims(Q, axis=2)
-
-        # Attention scores
-        attention_scores = ops.matmul(K, Q_expanded)
-        attention_scores = ops.squeeze(attention_scores, axis=-1)
-        attention_scores = attention_scores / ops.sqrt(float(self.config.attention_dim))
-
-        # Apply softmax
-        attention_weights = ops.softmax(attention_scores, axis=1)
-        attention_weights_expanded = ops.expand_dims(attention_weights, axis=1)
-
-        # Weighted sum
-        user_representation = ops.matmul(
-            attention_weights_expanded,
-            gcn_features_reshaped
-        )
-        user_representation = ops.squeeze(user_representation, axis=1)
-
-        # Reshape back
-        user_representation = ops.reshape(
-            user_representation,
-            (batch_size, news_num, self.news_embedding_dim)
-        )
+        # Compute mean, avoiding division by zero
+        sum_features = ops.sum(masked_gcn, axis=1)
+        count_features = ops.sum(mask_expanded, axis=1)
+        count_features = ops.maximum(count_features, 1.0)  # Avoid division by zero
+        user_representation = sum_features / count_features
 
         return user_representation
 
@@ -576,8 +515,8 @@ class CROWNUserEncoder(keras.Model):
 class CROWNScorer(keras.Model):
     """Scoring component for CROWN model."""
 
-    def __init__(self, config: CROWNConfig, news_encoder: CROWNNewsEncoder,
-                 user_encoder: CROWNUserEncoder, name: str = "crown_scorer"):
+    def __init__(self, config: CROWNConfig, news_encoder: NewsEncoder,
+                 user_encoder: UserEncoder, name: str = "crown_scorer"):
         super().__init__(name=name)
         self.config = config
         self.news_encoder = news_encoder
@@ -606,11 +545,15 @@ class CROWNScorer(keras.Model):
         candidate_repr = self.candidate_encoder_train(candidate_inputs, training=training)
         # Result: (batch_size, num_candidates, news_embedding_dim)
 
-        # Encode user with candidates  
-        user_repr = self.user_encoder((history_inputs, candidate_repr), training=training)
+        # Encode user
+        user_repr = self.user_encoder(history_inputs, training=training)
+
+        # Expand user representation for multiple candidates
+        user_repr_expanded = ops.expand_dims(user_repr, axis=1)
+        user_repr_expanded = ops.repeat(user_repr_expanded, ops.shape(candidate_repr)[1], axis=1)
 
         # Calculate scores using element-wise multiplication and sum
-        scores = ops.sum(user_repr * candidate_repr, axis=-1)
+        scores = ops.sum(user_repr_expanded * candidate_repr, axis=-1)
 
         # Apply softmax
         return ops.softmax(scores, axis=-1)
@@ -631,8 +574,7 @@ class CROWNScorer(keras.Model):
         candidate_repr = ops.expand_dims(candidate_repr, axis=1)
 
         # Encode user
-        user_repr = self.user_encoder((history_inputs, candidate_repr), training=training)
-        user_repr = ops.squeeze(user_repr, axis=1)
+        user_repr = self.user_encoder(history_inputs, training=training)
 
         # Calculate score
         score = ops.sum(user_repr * ops.squeeze(candidate_repr, axis=1), axis=-1)
@@ -656,10 +598,14 @@ class CROWNScorer(keras.Model):
         # Result: (batch_size, num_candidates, news_embedding_dim)
 
         # Encode user
-        user_repr = self.user_encoder((history_inputs, candidate_repr), training=training)
+        user_repr = self.user_encoder(history_inputs, training=training)
+
+        # Expand user representation for multiple candidates
+        user_repr_expanded = ops.expand_dims(user_repr, axis=1)
+        user_repr_expanded = ops.repeat(user_repr_expanded, ops.shape(candidate_repr)[1], axis=1)
 
         # Calculate scores
-        scores = ops.sum(user_repr * candidate_repr, axis=-1)
+        scores = ops.sum(user_repr_expanded * candidate_repr, axis=-1)
 
         # Apply sigmoid for consistency
         return ops.sigmoid(scores)
@@ -687,9 +633,9 @@ class CROWN(BaseModel):
             # Intent disentanglement
             intent_num: int = 4,
             alpha: float = 0.5,
-            # Transformer parameters
-            num_heads: int = 16,
-            head_dim: int = 16,
+            # MAB parameters
+            num_heads: int = 12,
+            head_dim: int = 25,
             feedforward_dim: int = 512,
             num_layers: int = 2,
             # ISAB parameters
@@ -770,7 +716,7 @@ class CROWN(BaseModel):
             output_dim=self.config.embedding_size,
             embeddings_initializer=keras.initializers.Constant(self.processed_news["embeddings"]),
             trainable=True,
-            mask_zero=True,
+            mask_zero=False,
             name="word_embedding",
         )
 
@@ -791,7 +737,7 @@ class CROWN(BaseModel):
         )
 
         # Create encoders
-        self.news_encoder = CROWNNewsEncoder(
+        self.news_encoder = NewsEncoder(
             self.config,
             self.embedding_layer,
             self.category_embedding,
@@ -802,11 +748,15 @@ class CROWN(BaseModel):
         category_num = self.processed_news.get("category_num", 18)  # Default from your data
         self.news_encoder.category_predictor = CategoryPredictor(category_num)
 
-        self.user_encoder = CROWNUserEncoder(self.config, self.news_encoder)
+        self.user_encoder = UserEncoder(self.config, self.news_encoder)
         self.scorer = CROWNScorer(self.config, self.news_encoder, self.user_encoder)
 
         # Build compatibility models
         self.training_model, self.scorer_model = self._build_compatibility_models()
+
+    def build(self, input_shape):
+        """Build the CROWN model."""
+        super().build(input_shape)
 
     def _build_compatibility_models(self) -> Tuple[keras.Model, keras.Model]:
         """Build training and scorer models for compatibility."""
@@ -853,19 +803,45 @@ class CROWN(BaseModel):
 
         return training_model, scorer_model
 
+    def _validate_inputs(self, inputs: Dict, training: bool = None) -> None:
+        """Validate input format and shapes based on mode."""
+        if not isinstance(inputs, dict):
+            raise TypeError("Inputs must be a dictionary")
+
+        input_keys = set(inputs.keys())
+
+        if training:
+            # Training mode expects multiple keys for history and candidates
+            required_hist_keys = {"hist_tokens", "hist_abstract_tokens", "hist_category", "hist_subcategory"}
+            required_cand_keys = {"cand_tokens", "cand_abstract_tokens", "cand_category", "cand_subcategory"}
+
+            if not (required_hist_keys.issubset(input_keys) and required_cand_keys.issubset(input_keys)):
+                raise ValueError(
+                    f"Training mode requires history keys: {required_hist_keys} and candidate keys: {required_cand_keys}, "
+                    f"but got keys: {list(input_keys)}"
+                )
+        else:
+            # Inference mode - check for different valid combinations
+            # Add validation logic for inference mode if needed
+            pass
+
     def call(self, inputs, training=None):
         """Main forward pass of CROWN model."""
-        # Extract features based on input keys
-        if training:
-            return self._handle_training(inputs, training)
-        else:
-            # For inference, route based on input format
-            if all(key in inputs for key in ['hist_tokens', 'cand_tokens']):
-                return self._handle_multiple_candidates(inputs, training)
-            else:
-                raise ValueError("Invalid input format for CROWN model")
+        self._validate_inputs(inputs, training)
 
-    def _handle_training(self, inputs, training=None):
+        if training:
+            # Training mode: always use training format
+            return self._handle_training(inputs, training=training)
+        else:
+            # Inference mode: route based on input format
+            if "hist_tokens" in inputs and "cand_tokens" in inputs:
+                # Multiple candidates format
+                return self._handle_multiple_candidates(inputs)
+            else:
+                # Add other inference modes as needed
+                raise ValueError("Invalid input format for inference mode")
+
+    def _handle_training(self, inputs, training=True):
         """Handle training batch scoring with softmax output."""
         # Concatenate history inputs
         history_concat = ops.concatenate([

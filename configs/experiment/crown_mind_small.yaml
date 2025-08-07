@@ -13,8 +13,8 @@ model_name: "CROWN"
 
 # Global parameters
 seed: 42 # Global seed for reproducibility
-max_title_length: 50
-max_abstract_length: 100
+max_title_length: 32
+max_abstract_length: 50
 max_history_length: 50
 max_impressions_length: 5
 
@@ -37,9 +37,9 @@ model:
   embedding_size: 300
   
   # Intent disentanglement parameters
-  intent_num: 4 # Number of intents (k parameter)
+  intent_num: 3 # Number of intents (k parameter)
   intent_embedding_dim: 200
-  alpha: 0.5 # Weight for auxiliary category prediction loss
+  alpha: 0.3 # Weight for auxiliary category prediction loss
   
   # Category embeddings
   category_embedding_dim: 100
@@ -49,8 +49,8 @@ model:
   attention_dim: 200
   
   # Transformer parameters
-  num_heads: 8
-  head_dim: 40 # 8 * 40 = 320
+  num_heads: 12
+  head_dim: 25
   feedforward_dim: 512
   num_layers: 2
   

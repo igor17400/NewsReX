@@ -409,9 +409,7 @@ class MultiHeadAttentionBlock(layers.Layer):
         return O
 
     def compute_output_shape(self, input_shape):
-        if isinstance(input_shape, tuple):
-            return input_shape[0][:-1] + (self.dim_out,)
-        return input_shape[:-1] + (self.dim_out,)
+        return input_shape
 
 
 class InducedSetAttentionBlock(layers.Layer):
