@@ -1,7 +1,7 @@
 import keras
 import numpy as np
 
-from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 
 
 class NewsRecommenderKerasMetric(keras.metrics.Metric):

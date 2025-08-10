@@ -331,7 +331,6 @@ class NRMS(BaseModel):
             output_dim=self.config.embedding_size,
             embeddings_initializer=keras.initializers.Constant(self.processed_news["embeddings"]),
             trainable=True,
-            mask_zero=True,
             name="word_embedding",
         )
 

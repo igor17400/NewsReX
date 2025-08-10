@@ -74,4 +74,4 @@ sampling:
 device:
   gpu_ids: [ 0 ]
   memory_limit: 2
-  mixed_precision: false
+  precision: "float32"

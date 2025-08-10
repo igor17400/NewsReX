@@ -283,10 +283,10 @@ class GraphSAGELayer(layers.Layer):
             # Combine self and neighbor features
             h = h_self + h_neigh + self.bias[i]
 
-            # Apply activation (except for last layer)
-            if i < self.num_layers - 1 or self.num_layers == 1:
-                h = self.activation(h)
-                h = self.dropout(h, training=training)
+            # Apply activation and dropout for all layers
+            # Remove conditional logic to avoid JAX tracing issues
+            h = self.activation(h)
+            h = self.dropout(h, training=training)
 
         return h
 
@@ -357,10 +357,13 @@ class MultiHeadAttentionBlock(layers.Layer):
         K_proj = self.fc_k(K)
         V_proj = self.fc_v(K)
 
-        # Reshape for multi-head attention
-        batch_size = ops.shape(Q)[0]
-        seq_len_q = ops.shape(Q)[1]
-        seq_len_k = ops.shape(K)[1]
+        # Get shapes for multi-head attention
+        # Using static shapes where possible for JAX compatibility
+        q_shape = ops.shape(Q)
+        k_shape = ops.shape(K)
+        batch_size = q_shape[0]
+        seq_len_q = q_shape[1]  
+        seq_len_k = k_shape[1]
 
         head_dim = self.dim_out // self.num_heads
 
@@ -458,10 +461,15 @@ class InducedSetAttentionBlock(layers.Layer):
         Returns:
             Output tensor of shape (batch_size, seq_len, dim_out)
         """
-        batch_size = ops.shape(inputs)[0]
-
-        # Repeat inducing points for batch
-        I = ops.repeat(self.inducing_points, batch_size, axis=0)
+        # Use broadcasting instead of repeat to avoid dynamic batch size issues
+        input_shape = ops.shape(inputs)
+        batch_size = input_shape[0]
+        
+        # Broadcast inducing points for batch
+        I = ops.broadcast_to(
+            ops.expand_dims(self.inducing_points, axis=0),
+            (batch_size, self.inducing_points.shape[0], self.inducing_points.shape[1])
+        )
 
         # First MAB: attending from inducing points to input
         H = self.mab0((I, inputs), training=training)

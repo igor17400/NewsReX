@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import Progress
 
-from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from ..io.saving import save_predictions_to_file_fn, get_output_run_dir
 from ..training.engine import test_step_fn
 from ..io.logging import log_metrics_to_console_fn
@@ -181,9 +181,9 @@ def _run_initial_validation(
 
     if cfg.eval.fast_evaluation:
         metrics = model.fast_evaluate(
-            user_hist_dataloader=dataset_provider.user_history_dataloader(mode="val"),
+            user_hist_dataloader=dataset_provider.user_history_dataloader(mode="val", batch_size=cfg.eval.batch_size),
             impression_iterator=dataset_provider.impression_dataloader(mode="val"),
-            news_dataloader=dataset_provider.news_dataloader(),
+            news_dataloader=dataset_provider.news_dataloader(batch_size=cfg.eval.batch_size),
             metrics_calculator=custom_metrics_engine,
             progress=progress_bar_manager,
             mode="initial_val",
@@ -277,9 +277,9 @@ def _run_final_testing(
 
     if cfg.eval.fast_evaluation:
         return model.fast_evaluate(
-            user_hist_dataloader=dataset_provider.user_history_dataloader(mode="test"),
+            user_hist_dataloader=dataset_provider.user_history_dataloader(mode="test", batch_size=cfg.eval.batch_size),
             impression_iterator=dataset_provider.impression_dataloader(mode="test"),
-            news_dataloader=dataset_provider.news_dataloader(),
+            news_dataloader=dataset_provider.news_dataloader(batch_size=cfg.eval.batch_size),
             metrics_calculator=custom_metrics_engine,
             progress=progress_bar_manager,
             mode="test",

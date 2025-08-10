@@ -68,4 +68,4 @@ sampling:
 
 device:
   gpu_ids: [ 0 ] # Use first GPU
-  mixed_precision: false
+  precision: "float32"

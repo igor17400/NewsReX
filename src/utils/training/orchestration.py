@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.progress import Progress
 
 from .callbacks import FastEvaluationCallback, SlowEvaluationCallback, RichProgressCallback
-from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from src.utils.evaluation import (
     _run_initial_validation,
     _run_final_testing,
@@ -61,16 +61,39 @@ def training_loop_orchestrator(
     # Setup WandB history tracking
     wandb_history = {} if cfg.logging.enable_wandb else None
 
-    # Initial validation
-    initial_metrics = _run_initial_validation(
-        model, dataset_provider, custom_metrics_engine, progress_bar_manager, cfg
-    )
-    if wandb.run and wandb_history is not None:
-        log_metrics_to_wandb_fn(
-            {f"initial_val/{k}": v for k, v in initial_metrics.items()},
-            0,
-            wandb_history,
+    # JIT compilation warmup to avoid slow first epoch
+    try:
+        from src.utils.jax_optimizer import warmup_jit_compilation
+        console.log("[bold]Warming up JIT compilation to avoid slow first epoch...[/bold]")
+
+        # Get a sample batch for warmup
+        model_name = cfg.model._target_.split('.')[-1].lower()
+        sample_dataloader = dataset_provider.train_dataloader(
+            batch_size=min(2, cfg.train.batch_size),  # Small batch for warmup
+            model_name=model_name
         )
+
+        # Get first batch
+        for sample_batch in sample_dataloader:
+            warmup_jit_compilation(model, sample_batch)
+            break
+
+        console.log("[green]JIT warmup completed![/green]")
+    except Exception as e:
+        console.log(f"[yellow]JIT warmup skipped: {e}[/yellow]")
+
+    initial_metrics = {}
+    if cfg.eval.run_initial_eval:
+        # Initial validation
+        initial_metrics = _run_initial_validation(
+            model, dataset_provider, custom_metrics_engine, progress_bar_manager, cfg
+        )
+        if wandb.run and wandb_history is not None:
+            log_metrics_to_wandb_fn(
+                {f"initial_val/{k}": v for k, v in initial_metrics.items()},
+                0,
+                wandb_history,
+            )
 
     # Model Summary
     if hasattr(model, "training_model") and model.training_model is not None:

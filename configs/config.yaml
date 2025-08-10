@@ -22,7 +22,6 @@ output_base_dir: "outputs"
 device:
   gpu_ids: [ 0 ] # Use all 4 GPUs
   memory_limit: 1 # Use 100% of each GPU's memory
-  mixed_precision: true
 num_workers: 4
 
 # Default training parameters (can be overridden by experiment)
@@ -38,14 +37,15 @@ train:
 # Default evaluation parameters (can be overridden by experiment)
 eval:
   fast_evaluation: true # Whether to use fast evaluation with precomputed vectors
-  batch_size: 128 # Batch size for evaluation
+  batch_size: 4096 # Batch size for evaluation
   save_predictions: true # Whether to save predictions to file
   predictions_dir: "predictions" # Directory to save predictions
+  run_initial_eval: false # <-- (optional, it's interesting to see performance improve, but it takes longer)
   run_test_after_training: true # <--- (optional, if you want to run test after training)
 
 # Default logging configuration (can be overridden by experiment)
 logging:
-  project_name: "BTC"
+  project_name: "NewsReX"
   log_every_n_steps: 100
   enable_wandb: false
   experiment_name: ${model._target_}_${dataset.version} # This will create names like "src.models.nrms.NRMS_small"

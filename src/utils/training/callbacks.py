@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import Progress
 
-from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from src.utils.evaluation import run_evaluation_epoch
 from ..io.logging import log_metrics_to_console_fn, log_metrics_to_wandb_fn
 from ..io.model_config import save_model_config
@@ -54,9 +54,10 @@ class FastEvaluationCallback(keras.callbacks.Callback):
 
         # Run fast evaluation
         val_metrics = self.model.fast_evaluate(
-            user_hist_dataloader=self.dataset_provider.user_history_dataloader(mode="val"),
+            user_hist_dataloader=self.dataset_provider.user_history_dataloader(mode="val",
+                                                                               batch_size=self.cfg.eval.batch_size),
             impression_iterator=self.dataset_provider.impression_dataloader(mode="val"),
-            news_dataloader=self.dataset_provider.news_dataloader(),
+            news_dataloader=self.dataset_provider.news_dataloader(batch_size=self.cfg.eval.batch_size),
             metrics_calculator=self.custom_metrics_engine,
             progress=self.progress_bar_manager,
             mode="val",

@@ -18,7 +18,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from src.utils.io.saving import get_output_run_dir
 from src.utils.io.logging import setup_logging, console
 from src.utils.model.model import initialize_model_and_dataset
@@ -28,14 +28,38 @@ from src.utils.io.logging import setup_wandb_session
 from src.utils.device.device import setup_device
 
 
-def setup_precision(use_mixed_precision: bool):
-    """Sets the global Keras precision policy."""
-    if use_mixed_precision:
-        console.log("Setting Keras mixed precision policy to 'mixed_float16'.")
-        policy = keras.mixed_precision.Policy('mixed_float16')
-        keras.mixed_precision.set_global_policy(policy)
-    else:
-        console.log("Using Keras default precision policy 'float32'.")
+def setup_precision(precision: str = 'float32'):
+    """Sets the global Keras precision policy.
+    
+    Args:
+        precision: Precision type - 'float32', 'float16', or 'bfloat16'.
+                  When using float16 or bfloat16, automatically enables mixed precision.
+    """
+    # Map simple precision names to Keras mixed precision policies
+    precision_map = {
+        'float32': 'float32',
+        'float16': 'mixed_float16',  # Automatically use mixed precision for float16
+        'bfloat16': 'mixed_bfloat16'  # Automatically use mixed precision for bfloat16
+    }
+
+    # Get the policy name
+    policy_name = precision_map.get(precision, 'float32')
+
+    if precision not in precision_map:
+        console.log(f"[yellow]Warning: Invalid precision '{precision}'. Using 'float32'.[/yellow]")
+        console.log(f"[yellow]Valid options: float32, float16, bfloat16[/yellow]")
+        policy_name = 'float32'
+
+    console.log(f"Setting Keras precision policy to '{policy_name}' (precision: {precision}).")
+    policy = keras.mixed_precision.Policy(policy_name)
+    keras.mixed_precision.set_global_policy(policy)
+
+    # Log compute and variable dtypes
+    console.log(f"  Compute dtype: {policy.compute_dtype}")
+    console.log(f"  Variable dtype: {policy.variable_dtype}")
+
+    if precision in ['float16', 'bfloat16']:
+        console.log(f"  [green]Mixed precision enabled: Computations in {precision}, variables in float32[/green]")
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="config")
@@ -54,11 +78,15 @@ def main_training_entry(cfg: DictConfig) -> None:
         gpu_ids=cfg.device.gpu_ids if hasattr(cfg.device, "gpu_ids") else [],
         memory_limit=cfg.device.memory_limit if hasattr(cfg.device, "memory_limit") else 0.9
     )
-    # Determine precision from the boolean flag
-    use_mixed = cfg.device.mixed_precision if hasattr(cfg.device, "mixed_precision") else False
+    # Determine precision policy
+    if hasattr(cfg.device, "precision"):
+        # New format: precision as string (float32, float16, bfloat16)
+        precision = cfg.device.precision
+    else:
+        precision = "float32"  # Default
 
     # Set global Keras precision policy
-    setup_precision(use_mixed)
+    setup_precision(precision)
 
     # Set random seeds for all backends (Keras 3 handles backend-specific seeding)
     keras.utils.set_random_seed(cfg.seed)

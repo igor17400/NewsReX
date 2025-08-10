@@ -476,10 +476,11 @@ class NAMLScorer(keras.Model):
             Softmax scores (batch_size, num_candidates)
         """
         # Get user representation from concatenated history
-        user_repr = self.user_encoder(history_inputs, training=training)
+        # Always use training=True for training batch
+        user_repr = self.user_encoder(history_inputs, training=True)
 
         # Get representations for all candidates using stored TimeDistributed layer
-        candidate_reprs = self.candidate_encoder_train(candidate_inputs, training=training)
+        candidate_reprs = self.candidate_encoder_train(candidate_inputs, training=True)
         # Result: (batch_size, num_candidates, cnn_filter_num)
 
         # Expand user representation for broadcasting
@@ -489,7 +490,8 @@ class NAMLScorer(keras.Model):
         scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)  # (batch_size, num_candidates)
 
         # Apply softmax for training
-        return ops.softmax(scores, axis=-1)
+        output = ops.softmax(scores, axis=-1)
+        return output
 
     def score_single_candidate(self, history_inputs, candidate_inputs, training=None):
         """Score single candidate with sigmoid output.
@@ -503,18 +505,19 @@ class NAMLScorer(keras.Model):
             Sigmoid scores (batch_size, 1)
         """
         # Get user representation from concatenated history
-        user_repr = self.user_encoder(history_inputs, training=training)
+        user_repr = self.user_encoder(history_inputs, training=False)
 
         # Get candidate representation from concatenated input
-        candidate_repr = self.news_encoder(candidate_inputs, training=training)
+        candidate_repr = self.news_encoder(candidate_inputs, training=False)
 
         # Calculate score using dot product
         score = ops.sum(candidate_repr * user_repr, axis=-1, keepdims=True)
 
         # Apply sigmoid for probability
-        return ops.sigmoid(score)
+        output = ops.sigmoid(score)
+        return output
 
-    def score_multiple_candidates(self, history_inputs, candidate_inputs, training=False):
+    def score_multiple_candidates(self, history_inputs, candidate_inputs, training=None):
         """Score multiple candidates with sigmoid activation.
         
         Args:
@@ -526,10 +529,10 @@ class NAMLScorer(keras.Model):
             Sigmoid scores (batch_size, num_candidates)
         """
         # Get user representation from concatenated history
-        user_repr = self.user_encoder(history_inputs, training=training)
+        user_repr = self.user_encoder(history_inputs, training=False)
 
         # Get representations for all candidates using stored TimeDistributed layer
-        candidate_reprs = self.candidate_encoder_eval(candidate_inputs, training=training)
+        candidate_reprs = self.candidate_encoder_eval(candidate_inputs, training=False)
         # Result: (batch_size, num_candidates, cnn_filter_num)
 
         # Expand user representation for broadcasting
@@ -539,7 +542,8 @@ class NAMLScorer(keras.Model):
         scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)
 
         # Apply sigmoid activation for consistency with single candidate scoring
-        return ops.sigmoid(scores)
+        output = ops.sigmoid(scores)
+        return output
 
 
 class NAML(BaseModel):
@@ -611,7 +615,6 @@ class NAML(BaseModel):
 
         # Set BaseModel attributes for fast evaluation (required by BaseModel)
         self.process_user_id = process_user_id
-        self.float_dtype = "float32"
 
     def _validate_processed_news(self) -> None:
         """Validate processed news data integrity."""
@@ -641,7 +644,6 @@ class NAML(BaseModel):
             output_dim=self.config.embedding_size,
             embeddings_initializer=keras.initializers.Constant(self.processed_news["embeddings"]),
             trainable=True,
-            mask_zero=False,
             name="word_embedding",
         )
 
@@ -672,6 +674,32 @@ class NAML(BaseModel):
 
         # Build training and scorer models for compatibility
         self.training_model, self.scorer_model = self._build_compatibility_models()
+
+    def build(self, input_shape=None):
+        """Build the NAML model with proper layer initialization.
+        
+        This method ensures all internal layers are properly built
+        when the model is first called.
+        """
+        if self.built:
+            return
+            
+        # Build all components to ensure proper initialization
+        # Note: The components are already created in __init__, this just marks them as built
+        if hasattr(self, 'embedding_layer'):
+            self.embedding_layer.build((None,))  # Build with variable batch size
+        
+        if hasattr(self, 'news_encoder') and hasattr(self.news_encoder, 'build'):
+            self.news_encoder.build((None, self.config.max_title_length + self.config.max_abstract_length + 2))
+            
+        if hasattr(self, 'user_encoder') and hasattr(self.user_encoder, 'build'):
+            self.user_encoder.build((None, self.config.max_history_length, 
+                                   self.config.max_title_length + self.config.max_abstract_length + 2))
+            
+        if hasattr(self, 'scorer') and hasattr(self.scorer, 'build'):
+            self.scorer.build(None)
+        
+        super().build(input_shape)
 
     def _build_compatibility_models(self) -> Tuple[keras.Model, keras.Model]:
         """Build training and scorer models for backward compatibility."""
@@ -796,7 +824,7 @@ class NAML(BaseModel):
             ops.expand_dims(inputs["cand_subcategory"], axis=-1),
         ], axis=-1)
 
-        return self.scorer.score_training_batch(history_concat, candidate_concat, training=True)
+        return self.scorer.score_training_batch(history_concat, candidate_concat)
 
     def _handle_multiple_candidates(self, inputs):
         """Handle multiple candidate scoring with sigmoid scores."""
@@ -816,7 +844,7 @@ class NAML(BaseModel):
             ops.expand_dims(inputs["cand_subcategory"], axis=-1),
         ], axis=-1)
 
-        return self.scorer.score_multiple_candidates(history_concat, candidate_concat, training=False)
+        return self.scorer.score_multiple_candidates(history_concat, candidate_concat)
 
     def get_config(self):
         """Returns the configuration of the NAML model for serialization."""
