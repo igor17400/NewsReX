@@ -1248,7 +1248,7 @@ class MINDDataset(BaseNewsDataset):
             model_name=model_name,
         )
 
-    def user_history_dataloader(self, mode: str) -> UserHistoryBatchDataloader:
+    def user_history_dataloader(self, mode: str, batch_size: int) -> UserHistoryBatchDataloader:
         """Create dataloader for user history validation/testing."""
         if mode == "val":
             user_history_tokens = self.val_behaviors_data["history_news_tokens"]
@@ -1274,7 +1274,7 @@ class MINDDataset(BaseNewsDataset):
             history_subcategory=user_history_subcategory,
             impression_ids=impression_ids,
             user_ids=user_ids,
-            batch_size=512,
+            batch_size=batch_size,
             process_title=self.process_title,
             process_abstract=self.process_abstract,
             process_category=self.process_category,
@@ -1316,7 +1316,7 @@ class MINDDataset(BaseNewsDataset):
             process_subcategory=self.process_subcategory,
         )
 
-    def news_dataloader(self) -> NewsBatchDataloader:
+    def news_dataloader(self, batch_size: int) -> NewsBatchDataloader:
         """Create dataloader for processed news validation/testing."""
         news_ids = self.processed_news.get("news_ids_original_strings", np.array([]))
         news_tokens = self.processed_news.get("tokens", np.array([]))
@@ -1330,7 +1330,7 @@ class MINDDataset(BaseNewsDataset):
             news_abstract_tokens=keras.ops.convert_to_tensor(news_abstract_tokens),
             news_category_indices=keras.ops.convert_to_tensor(news_category_indices),
             news_subcategory_indices=keras.ops.convert_to_tensor(news_subcategory_indices),
-            batch_size=512,
+            batch_size=batch_size,
             process_title=self.process_title,
             process_abstract=self.process_abstract,
             process_category=self.process_category,
