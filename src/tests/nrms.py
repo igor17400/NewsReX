@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script for NRMS model implementation."""
+"""Comprehensive test script for NRMS model implementation."""
 
 import os
 import sys
@@ -18,12 +18,179 @@ import numpy as np
 import keras
 from src.models.nrms import NRMS
 
+
+def create_dummy_data(batch_size=2, vocab_size=10000):
+    """Create dummy data for testing."""
+    data = {
+        # Training format inputs
+        "hist_tokens": np.random.randint(0, 1000, (batch_size, 50, 50), dtype=np.int32),
+        "cand_tokens": np.random.randint(0, 1000, (batch_size, 5, 50), dtype=np.int32),
+        
+        # Single candidate format
+        "history_tokens": np.random.randint(0, 1000, (batch_size, 50, 50), dtype=np.int32),
+        "single_candidate_tokens": np.random.randint(0, 1000, (batch_size, 50), dtype=np.int32),
+        
+        # Labels for training
+        "labels": np.zeros((batch_size, 5), dtype=np.float32),
+    }
+    # Set first item as positive for each batch
+    data["labels"][:, 0] = 1.0
+    return data
+
+
+def test_nrms_components(nrms_model, batch_size=2):
+    """Test individual NRMS components."""
+    print("\n" + "="*50)
+    print("TESTING INDIVIDUAL COMPONENTS")
+    print("="*50)
+    
+    # Test news encoder
+    print("\n1. Testing news encoder...")
+    news_input = np.random.randint(0, 1000, (batch_size, 50), dtype=np.int32)
+    news_output = nrms_model.news_encoder(news_input, training=False)
+    print(f"   ✓ News encoder output shape: {news_output.shape}")
+    assert news_output.shape == (batch_size, 300), f"Expected shape (batch_size, 300), got {news_output.shape}"
+    
+    # Test user encoder
+    print("\n2. Testing user encoder...")
+    history_input = np.random.randint(0, 1000, (batch_size, 50, 50), dtype=np.int32)
+    user_output = nrms_model.user_encoder(history_input, training=False)
+    print(f"   ✓ User encoder output shape: {user_output.shape}")
+    assert user_output.shape == (batch_size, 300), f"Expected shape (batch_size, 300), got {user_output.shape}"
+    
+    # Test scorer component
+    print("\n3. Testing scorer component...")
+    
+    # Test training batch scoring
+    hist_tokens = np.random.randint(0, 1000, (batch_size, 50, 50), dtype=np.int32)
+    cand_tokens = np.random.randint(0, 1000, (batch_size, 5, 50), dtype=np.int32)
+    
+    training_scores = nrms_model.scorer.score_training_batch(hist_tokens, cand_tokens, training=False)
+    print(f"   ✓ Training batch scores shape: {training_scores.shape}")
+    assert training_scores.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {training_scores.shape}"
+    
+    # Verify softmax output (should sum to 1)
+    score_sums = np.sum(training_scores, axis=-1)
+    assert np.allclose(score_sums, 1.0, rtol=1e-5), f"Softmax scores don't sum to 1: {score_sums}"
+    print(f"   ✓ Softmax scores sum to 1.0: {score_sums}")
+    
+    # Test single candidate scoring
+    single_cand = np.random.randint(0, 1000, (batch_size, 50), dtype=np.int32)
+    single_scores = nrms_model.scorer.score_single_candidate(hist_tokens, single_cand, training=False)
+    print(f"   ✓ Single candidate scores shape: {single_scores.shape}")
+    assert single_scores.shape == (batch_size, 1), f"Expected shape (batch_size, 1), got {single_scores.shape}"
+    
+    # Test multiple candidates scoring
+    multi_scores = nrms_model.scorer.score_multiple_candidates(hist_tokens, cand_tokens, training=False)
+    print(f"   ✓ Multiple candidates scores shape: {multi_scores.shape}")
+    assert multi_scores.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {multi_scores.shape}"
+    
+    print("\n✅ All component tests passed!")
+
+
+def test_nrms_call_method(nrms_model, batch_size=2):
+    """Test the main call method with different input formats."""
+    print("\n" + "="*50)
+    print("TESTING MAIN CALL METHOD")
+    print("="*50)
+    
+    dummy_data = create_dummy_data(batch_size)
+    
+    # Test 1: Training mode with training format
+    print("\n1. Testing training mode...")
+    training_inputs = {
+        "hist_tokens": dummy_data["hist_tokens"],
+        "cand_tokens": dummy_data["cand_tokens"]
+    }
+    
+    training_output = nrms_model(training_inputs, training=True)
+    print(f"   ✓ Training output shape: {training_output.shape}")
+    assert training_output.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {training_output.shape}"
+    
+    # Verify softmax output
+    score_sums = np.sum(training_output, axis=-1)
+    assert np.allclose(score_sums, 1.0, rtol=1e-5), f"Softmax scores don't sum to 1: {score_sums}"
+    print(f"   ✓ Training outputs are valid softmax scores")
+    
+    # Test 2: Inference mode with single candidate
+    print("\n2. Testing inference mode with single candidate...")
+    single_cand_inputs = {
+        "history_tokens": dummy_data["history_tokens"],
+        "single_candidate_tokens": dummy_data["single_candidate_tokens"]
+    }
+    
+    single_output = nrms_model(single_cand_inputs, training=False)
+    print(f"   ✓ Single candidate output shape: {single_output.shape}")
+    assert single_output.shape == (batch_size, 1), f"Expected shape (batch_size, 1), got {single_output.shape}"
+    
+    # Verify sigmoid output (should be between 0 and 1)
+    assert np.all(single_output >= 0) and np.all(single_output <= 1), "Sigmoid outputs should be in [0, 1]"
+    print(f"   ✓ Single candidate outputs are valid sigmoid scores")
+    
+    # Test 3: Inference mode with multiple candidates (validation format)
+    print("\n3. Testing inference mode with multiple candidates...")
+    multi_cand_inputs = {
+        "hist_tokens": dummy_data["hist_tokens"],
+        "cand_tokens": dummy_data["cand_tokens"]
+    }
+    
+    multi_output = nrms_model(multi_cand_inputs, training=False)
+    print(f"   ✓ Multiple candidates output shape: {multi_output.shape}")
+    assert multi_output.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {multi_output.shape}"
+    
+    # Verify sigmoid outputs (should be between 0 and 1)
+    assert np.all(multi_output >= 0) and np.all(multi_output <= 1), "Sigmoid outputs should be in [0, 1]"
+    print(f"   ✓ Multiple candidate outputs are valid sigmoid scores")
+    
+    print("\n✅ All call method tests passed!")
+
+
+def test_nrms_compilation(nrms_model, batch_size=2):
+    """Test model compilation and training step."""
+    print("\n" + "="*50)
+    print("TESTING MODEL COMPILATION AND TRAINING")
+    print("="*50)
+    
+    # Compile the model
+    print("\n1. Compiling model...")
+    nrms_model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=1e-4),
+        loss=keras.losses.CategoricalCrossentropy(from_logits=False),
+        metrics=[keras.metrics.CategoricalAccuracy()],
+    )
+    print("   ✓ Model compiled successfully")
+    
+    # Test a training step
+    print("\n2. Testing training step...")
+    dummy_data = create_dummy_data(batch_size)
+    
+    # Prepare inputs and labels
+    x = {
+        "hist_tokens": dummy_data["hist_tokens"],
+        "cand_tokens": dummy_data["cand_tokens"]
+    }
+    y = dummy_data["labels"]
+    
+    # Perform one training step
+    loss = nrms_model.train_on_batch(x, y)
+    print(f"   ✓ Training step completed, loss: {loss}")
+    
+    # Test evaluation
+    print("\n3. Testing evaluation...")
+    eval_results = nrms_model.evaluate(x, y, verbose=0)
+    print(f"   ✓ Evaluation completed, metrics: {eval_results}")
+    
+    print("\n✅ Compilation and training tests passed!")
+
+
 def test_nrms_model():
-    """Test NRMS model instantiation and basic functionality."""
+    """Comprehensive test of NRMS model."""
     
     # Mock processed news data
     processed_news = {
         "vocab_size": 10000,
+        "num_categories": 20,
+        "num_subcategories": 50,
         "embeddings": np.random.randn(10000, 300).astype(np.float32)
     }
     
@@ -44,75 +211,64 @@ def test_nrms_model():
     
     try:
         # Create NRMS model
-        print("Creating NRMS model...")
+        print("="*50)
+        print("CREATING NRMS MODEL")
+        print("="*50)
         nrms_model = NRMS(**model_params)
-        
-        # Test model components
         print("✓ NRMS model created successfully")
-        print(f"✓ Training model: {nrms_model.training_model.name}")
-        print(f"✓ Scoring model: {nrms_model.scorer_model.name}")
         
-        # Test with dummy data
-        batch_size = 2
-        hist_shape = (batch_size, 50, 50)  # max_history_length, max_title_length
-        cand_shape = (batch_size, 5, 50)   # max_impressions_length, max_title_length
+        # Check that model is built
+        assert nrms_model.news_encoder is not None, "News encoder not initialized"
+        assert nrms_model.user_encoder is not None, "User encoder not initialized"
+        assert nrms_model.scorer is not None, "Scorer not initialized"
+        assert nrms_model.training_model is not None, "Training model not initialized"
+        assert nrms_model.scorer_model is not None, "Scorer model not initialized"
+        print("✓ All model components initialized")
         
-        # Create dummy inputs
-        hist_input = np.random.randint(0, 1000, hist_shape, dtype=np.int32)
-        cand_input = np.random.randint(0, 1000, cand_shape, dtype=np.int32)
+        # Run component tests
+        test_nrms_components(nrms_model)
         
-        # Test training model
-        print("\nTesting training model...")
-        training_output = nrms_model.training_model([hist_input, cand_input])
-        print(f"✓ Training model output shape: {training_output.shape}")
+        # Run call method tests
+        test_nrms_call_method(nrms_model)
         
-        # Test scoring model
-        print("\nTesting scoring model...")
-        user_hist = np.random.randint(0, 1000, (batch_size, 50, 50), dtype=np.int32)
-        news_input = np.random.randint(0, 1000, (batch_size, 50), dtype=np.int32)
-        
-        scoring_output = nrms_model.scorer_model([user_hist, news_input])
-        print(f"✓ Scoring model output shape: {scoring_output.shape}")
-        
-        # Test news encoder
-        print("\nTesting news encoder...")
-        news_input_single = np.random.randint(0, 1000, (batch_size, 50), dtype=np.int32)
-        news_output = nrms_model.newsencoder(news_input_single)
-        print(f"✓ News encoder output shape: {news_output.shape}")
-        
-        # Test user encoder
-        print("\nTesting user encoder...")
-        user_output = nrms_model.userencoder(hist_input)
-        print(f"✓ User encoder output shape: {user_output.shape}")
-        
-        print("\n🎉 All tests passed! NRMS model is working correctly.")
+        # Run compilation and training tests
+        test_nrms_compilation(nrms_model)
         
         # Print model summary
         print("\n" + "="*50)
-        print("NRMS MODEL SUMMARY")
+        print("MODEL SUMMARY")
         print("="*50)
-        nrms_model.training_model.summary()
+        print("\nMain NRMS Model:")
+        nrms_model.summary()
+        
+        print("\n🎉 All NRMS tests passed successfully!")
         
     except Exception as e:
-        print(f"❌ Error testing NRMS model: {e}")
+        print(f"\n❌ Error testing NRMS model: {e}")
         import traceback
         traceback.print_exc()
         return False
     
     return True
 
+
 if __name__ == "__main__":
     # Set random seeds for reproducibility
     np.random.seed(42)
     keras.utils.set_random_seed(42)
-
-    print("Testing NRMS Model Implementation")
+    
+    print("\n" + "="*60)
+    print("NRMS MODEL COMPREHENSIVE TEST SUITE")
     print(f"Backend: {keras.backend.backend()}")
-    print("="*40)
+    print("="*60)
     
     success = test_nrms_model()
     
     if success:
-        print("\n✅ NRMS model implementation is ready for training!")
+        print("\n" + "="*60)
+        print("✅ NRMS MODEL IS FULLY FUNCTIONAL AND READY FOR TRAINING!")
+        print("="*60)
     else:
-        print("\n❌ NRMS model implementation needs fixes.") 
+        print("\n" + "="*60)
+        print("❌ NRMS MODEL IMPLEMENTATION NEEDS FIXES")
+        print("="*60)

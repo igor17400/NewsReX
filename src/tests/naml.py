@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script for NAML model implementation."""
+"""Comprehensive test script for NAML model implementation."""
 
 import os
 import sys
@@ -16,8 +16,274 @@ import numpy as np
 import keras
 from src.models.naml import NAML
 
+
+def create_dummy_data(batch_size=2, vocab_size=10000):
+    """Create dummy data for testing NAML."""
+    # NAML expects concatenated inputs: [title, abstract, category, subcategory]
+    # Total length = max_title_length + max_abstract_length + 2
+    total_length = 30 + 100 + 2  # 132
+    
+    data = {
+        # Training format inputs (concatenated)
+        "hist_concat": np.random.randint(0, 1000, (batch_size, 50, total_length), dtype=np.int32),
+        "cand_concat": np.random.randint(0, 1000, (batch_size, 5, total_length), dtype=np.int32),
+        
+        # Set category and subcategory IDs (last 2 positions)
+        # These should be smaller values for category/subcategory embeddings
+        "hist_concat_with_cats": np.random.randint(0, 1000, (batch_size, 50, total_length), dtype=np.int32),
+        "cand_concat_with_cats": np.random.randint(0, 1000, (batch_size, 5, total_length), dtype=np.int32),
+        
+        # Single candidate format
+        "history_concat": np.random.randint(0, 1000, (batch_size, 50, total_length), dtype=np.int32),
+        "single_candidate_concat": np.random.randint(0, 1000, (batch_size, total_length), dtype=np.int32),
+        
+        # Labels for training
+        "labels": np.zeros((batch_size, 5), dtype=np.float32),
+    }
+    
+    # Set proper category and subcategory values
+    for key in ["hist_concat_with_cats", "cand_concat_with_cats", "history_concat"]:
+        if "hist" in key or "history" in key:
+            # For history: shape is (batch_size, history_length, total_length)
+            data[key][:, :, -2] = np.random.randint(0, 20, data[key][:, :, -2].shape)  # category
+            data[key][:, :, -1] = np.random.randint(0, 50, data[key][:, :, -1].shape)  # subcategory
+        else:
+            # For candidates: shape is (batch_size, num_candidates, total_length) or (batch_size, total_length)
+            if len(data[key].shape) == 3:
+                data[key][:, :, -2] = np.random.randint(0, 20, data[key][:, :, -2].shape)
+                data[key][:, :, -1] = np.random.randint(0, 50, data[key][:, :, -1].shape)
+    
+    data["single_candidate_concat"][:, -2] = np.random.randint(0, 20, (batch_size,))  # category
+    data["single_candidate_concat"][:, -1] = np.random.randint(0, 50, (batch_size,))  # subcategory
+    
+    # Set first item as positive for each batch
+    data["labels"][:, 0] = 1.0
+    
+    return data
+
+
+def test_naml_components(naml_model, batch_size=2):
+    """Test individual NAML components."""
+    print("\n" + "="*50)
+    print("TESTING INDIVIDUAL COMPONENTS")
+    print("="*50)
+    
+    # Test individual view encoders
+    print("\n1. Testing view encoders...")
+    
+    # Title encoder
+    title_input = np.random.randint(0, 1000, (batch_size, 30), dtype=np.int32)
+    title_output = naml_model.title_encoder(title_input, training=False)
+    print(f"   ✓ Title encoder output shape: {title_output.shape}")
+    assert title_output.shape == (batch_size, 400), f"Expected shape (batch_size, 400), got {title_output.shape}"
+    
+    # Abstract encoder
+    abstract_input = np.random.randint(0, 1000, (batch_size, 100), dtype=np.int32)
+    abstract_output = naml_model.abstract_encoder(abstract_input, training=False)
+    print(f"   ✓ Abstract encoder output shape: {abstract_output.shape}")
+    assert abstract_output.shape == (batch_size, 400), f"Expected shape (batch_size, 400), got {abstract_output.shape}"
+    
+    # Category encoder
+    category_input = np.random.randint(0, 20, (batch_size, 1), dtype=np.int32)
+    category_output = naml_model.category_encoder(category_input, training=False)
+    print(f"   ✓ Category encoder output shape: {category_output.shape}")
+    assert category_output.shape == (batch_size, 400), f"Expected shape (batch_size, 400), got {category_output.shape}"
+    
+    # Subcategory encoder
+    subcategory_input = np.random.randint(0, 50, (batch_size, 1), dtype=np.int32)
+    subcategory_output = naml_model.subcategory_encoder(subcategory_input, training=False)
+    print(f"   ✓ Subcategory encoder output shape: {subcategory_output.shape}")
+    assert subcategory_output.shape == (batch_size, 400), f"Expected shape (batch_size, 400), got {subcategory_output.shape}"
+    
+    # Test news encoder (combines all views)
+    print("\n2. Testing news encoder...")
+    news_input = np.random.randint(0, 1000, (batch_size, 132), dtype=np.int32)
+    news_input[:, -2] = np.random.randint(0, 20, (batch_size,))  # category
+    news_input[:, -1] = np.random.randint(0, 50, (batch_size,))  # subcategory
+    
+    news_output = naml_model.news_encoder(news_input, training=False)
+    print(f"   ✓ News encoder output shape: {news_output.shape}")
+    assert news_output.shape == (batch_size, 400), f"Expected shape (batch_size, 400), got {news_output.shape}"
+    
+    # Test user encoder
+    print("\n3. Testing user encoder...")
+    history_input = np.random.randint(0, 1000, (batch_size, 50, 132), dtype=np.int32)
+    history_input[:, :, -2] = np.random.randint(0, 20, history_input[:, :, -2].shape)
+    history_input[:, :, -1] = np.random.randint(0, 50, history_input[:, :, -1].shape)
+    
+    user_output = naml_model.user_encoder(history_input, training=False)
+    print(f"   ✓ User encoder output shape: {user_output.shape}")
+    assert user_output.shape == (batch_size, 400), f"Expected shape (batch_size, 400), got {user_output.shape}"
+    
+    # Test scorer component
+    print("\n4. Testing scorer component...")
+    
+    # Prepare inputs
+    hist_concat = np.random.randint(0, 1000, (batch_size, 50, 132), dtype=np.int32)
+    hist_concat[:, :, -2] = np.random.randint(0, 20, hist_concat[:, :, -2].shape)
+    hist_concat[:, :, -1] = np.random.randint(0, 50, hist_concat[:, :, -1].shape)
+    
+    cand_concat = np.random.randint(0, 1000, (batch_size, 5, 132), dtype=np.int32)
+    cand_concat[:, :, -2] = np.random.randint(0, 20, cand_concat[:, :, -2].shape)
+    cand_concat[:, :, -1] = np.random.randint(0, 50, cand_concat[:, :, -1].shape)
+    
+    # Test training batch scoring
+    training_scores = naml_model.scorer.score_training_batch(hist_concat, cand_concat, training=False)
+    print(f"   ✓ Training batch scores shape: {training_scores.shape}")
+    assert training_scores.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {training_scores.shape}"
+    
+    # Verify softmax output
+    score_sums = np.sum(training_scores, axis=-1)
+    assert np.allclose(score_sums, 1.0, rtol=1e-5), f"Softmax scores don't sum to 1: {score_sums}"
+    print(f"   ✓ Softmax scores sum to 1.0: {score_sums}")
+    
+    # Test single candidate scoring
+    single_cand = np.random.randint(0, 1000, (batch_size, 132), dtype=np.int32)
+    single_cand[:, -2] = np.random.randint(0, 20, (batch_size,))
+    single_cand[:, -1] = np.random.randint(0, 50, (batch_size,))
+    
+    single_scores = naml_model.scorer.score_single_candidate(hist_concat, single_cand, training=False)
+    print(f"   ✓ Single candidate scores shape: {single_scores.shape}")
+    assert single_scores.shape == (batch_size, 1), f"Expected shape (batch_size, 1), got {single_scores.shape}"
+    
+    print("\n✅ All component tests passed!")
+
+
+def test_naml_call_method(naml_model, batch_size=2):
+    """Test the main call method with different input formats."""
+    print("\n" + "="*50)
+    print("TESTING MAIN CALL METHOD")
+    print("="*50)
+    
+    # For NAML, we need to provide separate inputs for each component
+    # Test 1: Training mode with separate inputs
+    print("\n1. Testing training mode...")
+    
+    # Create separate inputs for training
+    training_inputs = {
+        "hist_tokens": np.random.randint(0, 1000, (batch_size, 50, 30), dtype=np.int32),  # title tokens
+        "hist_abstract_tokens": np.random.randint(0, 1000, (batch_size, 50, 100), dtype=np.int32),  # abstract tokens
+        "hist_category": np.random.randint(0, 20, (batch_size, 50), dtype=np.int32),  # category IDs
+        "hist_subcategory": np.random.randint(0, 50, (batch_size, 50), dtype=np.int32),  # subcategory IDs
+        "cand_tokens": np.random.randint(0, 1000, (batch_size, 5, 30), dtype=np.int32),  # candidate titles
+        "cand_abstract_tokens": np.random.randint(0, 1000, (batch_size, 5, 100), dtype=np.int32),  # candidate abstracts
+        "cand_category": np.random.randint(0, 20, (batch_size, 5), dtype=np.int32),  # candidate categories
+        "cand_subcategory": np.random.randint(0, 50, (batch_size, 5), dtype=np.int32),  # candidate subcategories
+    }
+    
+    training_output = naml_model(training_inputs, training=True)
+    print(f"   ✓ Training output shape: {training_output.shape}")
+    assert training_output.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {training_output.shape}"
+    
+    # Verify softmax output
+    score_sums = np.sum(training_output, axis=-1)
+    assert np.allclose(score_sums, 1.0, rtol=1e-5), f"Softmax scores don't sum to 1: {score_sums}"
+    print(f"   ✓ Training outputs are valid softmax scores")
+    
+    # Test 2: Using the compatibility training_model with concatenated inputs
+    print("\n2. Testing compatibility training_model...")
+    dummy_data = create_dummy_data(batch_size)
+    
+    # Use the training_model which expects concatenated inputs
+    concat_hist = dummy_data["hist_concat_with_cats"]
+    concat_cand = dummy_data["cand_concat_with_cats"]
+    
+    training_output = naml_model.training_model([concat_hist, concat_cand])
+    print(f"   ✓ Training model output shape: {training_output.shape}")
+    assert training_output.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {training_output.shape}"
+    
+    # Verify softmax output
+    score_sums = np.sum(training_output, axis=-1)
+    assert np.allclose(score_sums, 1.0, rtol=1e-5), f"Softmax scores don't sum to 1: {score_sums}"
+    print(f"   ✓ Training model outputs are valid softmax scores")
+    
+    # Test 3: Using the scorer_model for single candidate
+    print("\n3. Testing scorer_model for single candidate...")
+    
+    concat_single_cand = dummy_data["single_candidate_concat"]
+    
+    scorer_output = naml_model.scorer_model([concat_hist[:, :, :], concat_single_cand])
+    print(f"   ✓ Scorer model output shape: {scorer_output.shape}")
+    assert scorer_output.shape == (batch_size, 1), f"Expected shape (batch_size, 1), got {scorer_output.shape}"
+    
+    # Verify sigmoid output
+    assert np.all(scorer_output >= 0) and np.all(scorer_output <= 1), "Sigmoid outputs should be in [0, 1]"
+    print(f"   ✓ Scorer model outputs are valid sigmoid scores")
+    
+    # Test 4: Inference mode with multiple candidates using separate inputs
+    print("\n4. Testing inference mode with multiple candidates...")
+    
+    # Create separate inputs for inference
+    inference_inputs = {
+        "hist_tokens": np.random.randint(0, 1000, (batch_size, 50, 30), dtype=np.int32),
+        "hist_abstract_tokens": np.random.randint(0, 1000, (batch_size, 50, 100), dtype=np.int32),
+        "hist_category": np.random.randint(0, 20, (batch_size, 50), dtype=np.int32),
+        "hist_subcategory": np.random.randint(0, 50, (batch_size, 50), dtype=np.int32),
+        "cand_tokens": np.random.randint(0, 1000, (batch_size, 5, 30), dtype=np.int32),
+        "cand_abstract_tokens": np.random.randint(0, 1000, (batch_size, 5, 100), dtype=np.int32),
+        "cand_category": np.random.randint(0, 20, (batch_size, 5), dtype=np.int32),
+        "cand_subcategory": np.random.randint(0, 50, (batch_size, 5), dtype=np.int32),
+    }
+    
+    multi_output = naml_model(inference_inputs, training=False)
+    print(f"   ✓ Multiple candidates output shape: {multi_output.shape}")
+    assert multi_output.shape == (batch_size, 5), f"Expected shape (batch_size, 5), got {multi_output.shape}"
+    
+    # NAML uses sigmoid for multiple candidates in inference
+    assert np.all(multi_output >= 0) and np.all(multi_output <= 1), "Outputs should be in [0, 1]"
+    print(f"   ✓ Multiple candidate outputs are valid scores")
+    
+    print("\n✅ All call method tests passed!")
+
+
+def test_naml_compilation(naml_model, batch_size=2):
+    """Test model compilation and training step."""
+    print("\n" + "="*50)
+    print("TESTING MODEL COMPILATION AND TRAINING")
+    print("="*50)
+    
+    # Compile the model
+    print("\n1. Compiling model...")
+    naml_model.compile(
+        optimizer=keras.optimizers.Adam(learning_rate=1e-4),
+        loss=keras.losses.CategoricalCrossentropy(from_logits=False),
+        metrics=[keras.metrics.CategoricalAccuracy()],
+    )
+    print("   ✓ Model compiled successfully")
+    
+    # Test a training step
+    print("\n2. Testing training step...")
+    
+    # Prepare inputs with separate keys as expected by NAML
+    x = {
+        "hist_tokens": np.random.randint(0, 1000, (batch_size, 50, 30), dtype=np.int32),
+        "hist_abstract_tokens": np.random.randint(0, 1000, (batch_size, 50, 100), dtype=np.int32),
+        "hist_category": np.random.randint(0, 20, (batch_size, 50), dtype=np.int32),
+        "hist_subcategory": np.random.randint(0, 50, (batch_size, 50), dtype=np.int32),
+        "cand_tokens": np.random.randint(0, 1000, (batch_size, 5, 30), dtype=np.int32),
+        "cand_abstract_tokens": np.random.randint(0, 1000, (batch_size, 5, 100), dtype=np.int32),
+        "cand_category": np.random.randint(0, 20, (batch_size, 5), dtype=np.int32),
+        "cand_subcategory": np.random.randint(0, 50, (batch_size, 5), dtype=np.int32),
+    }
+    
+    # Create labels
+    y = np.zeros((batch_size, 5), dtype=np.float32)
+    y[:, 0] = 1.0  # First item is positive
+    
+    # Perform one training step
+    loss = naml_model.train_on_batch(x, y)
+    print(f"   ✓ Training step completed, loss: {loss}")
+    
+    # Test evaluation
+    print("\n3. Testing evaluation...")
+    eval_results = naml_model.evaluate(x, y, verbose=0)
+    print(f"   ✓ Evaluation completed, metrics: {eval_results}")
+    
+    print("\n✅ Compilation and training tests passed!")
+
+
 def test_naml_model():
-    """Test NAML model instantiation and basic functionality."""
+    """Comprehensive test of NAML model."""
     
     # Mock processed news data
     processed_news = {
@@ -49,75 +315,68 @@ def test_naml_model():
     
     try:
         # Create NAML model
-        print("Creating NAML model...")
+        print("="*50)
+        print("CREATING NAML MODEL")
+        print("="*50)
         naml_model = NAML(**model_params)
-        
-        # Test model components
         print("✓ NAML model created successfully")
-        print(f"✓ Training model: {naml_model.training_model.name}")
-        print(f"✓ Scoring model: {naml_model.scorer_model.name}")
         
-        # Test with dummy data
-        batch_size = 2
-        hist_shape = (batch_size, 50, 132)  # max_history_length, title + abstract + 2
-        cand_shape = (batch_size, 5, 132)   # max_impressions_length, title + abstract + 2
+        # Check that model is built
+        assert naml_model.news_encoder is not None, "News encoder not initialized"
+        assert naml_model.user_encoder is not None, "User encoder not initialized"
+        assert naml_model.title_encoder is not None, "Title encoder not initialized"
+        assert naml_model.abstract_encoder is not None, "Abstract encoder not initialized"
+        assert naml_model.category_encoder is not None, "Category encoder not initialized"
+        assert naml_model.subcategory_encoder is not None, "Subcategory encoder not initialized"
+        assert naml_model.scorer is not None, "Scorer not initialized"
+        assert naml_model.training_model is not None, "Training model not initialized"
+        assert naml_model.scorer_model is not None, "Scorer model not initialized"
+        print("✓ All model components initialized")
         
-        # Create dummy inputs
-        hist_input = np.random.randint(0, 1000, hist_shape, dtype=np.int32)
-        cand_input = np.random.randint(0, 1000, cand_shape, dtype=np.int32)
+        # Run component tests
+        test_naml_components(naml_model, batch_size=2)
         
-        # Test training model
-        print("\nTesting training model...")
-        training_output = naml_model.training_model([hist_input, cand_input])
-        print(f"✓ Training model output shape: {training_output.shape}")
+        # Run call method tests
+        test_naml_call_method(naml_model, batch_size=2)
         
-        # Test scoring model
-        print("\nTesting scoring model...")
-        user_hist = np.random.randint(0, 1000, (batch_size, 50, 132), dtype=np.int32)
-        news_input = np.random.randint(0, 1000, (batch_size, 132), dtype=np.int32)
-        
-        scoring_output = naml_model.scorer_model([user_hist, news_input])
-        print(f"✓ Scoring model output shape: {scoring_output.shape}")
-        
-        # Test news encoder
-        print("\nTesting news encoder...")
-        news_input_single = np.random.randint(0, 1000, (batch_size, 132), dtype=np.int32)
-        news_output = naml_model.newsencoder(news_input_single)
-        print(f"✓ News encoder output shape: {news_output.shape}")
-        
-        # Test user encoder
-        print("\nTesting user encoder...")
-        user_output = naml_model.userencoder(hist_input)
-        print(f"✓ User encoder output shape: {user_output.shape}")
-        
-        print("\n🎉 All tests passed! NAML model is working correctly.")
+        # Run compilation and training tests
+        test_naml_compilation(naml_model, batch_size=2)
         
         # Print model summary
         print("\n" + "="*50)
-        print("NAML MODEL SUMMARY")
+        print("MODEL SUMMARY")
         print("="*50)
-        naml_model.training_model.summary()
+        print("\nMain NAML Model:")
+        naml_model.summary()
+        
+        print("\n🎉 All NAML tests passed successfully!")
         
     except Exception as e:
-        print(f"❌ Error testing NAML model: {e}")
+        print(f"\n❌ Error testing NAML model: {e}")
         import traceback
         traceback.print_exc()
         return False
     
     return True
 
+
 if __name__ == "__main__":
     # Set random seeds for reproducibility
     np.random.seed(42)
     keras.utils.set_random_seed(42)
     
-    print("Testing NAML Model Implementation")
+    print("\n" + "="*60)
+    print("NAML MODEL COMPREHENSIVE TEST SUITE")
     print(f"Backend: {keras.backend.backend()}")
-    print("="*40)
+    print("="*60)
     
     success = test_naml_model()
     
     if success:
-        print("\n✅ NAML model implementation is ready for training!")
+        print("\n" + "="*60)
+        print("✅ NAML MODEL IS FULLY FUNCTIONAL AND READY FOR TRAINING!")
+        print("="*60)
     else:
-        print("\n❌ NAML model implementation needs fixes.") 
+        print("\n" + "="*60)
+        print("❌ NAML MODEL IMPLEMENTATION NEEDS FIXES")
+        print("="*60)

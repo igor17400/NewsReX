@@ -1,6 +1,5 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 from dataclasses import dataclass
-import numpy as np
 
 import keras
 from keras import layers, ops
@@ -610,34 +609,32 @@ class NAML(BaseModel):
         self.processed_news = processed_news
         self._validate_processed_news()
 
-        # Initialize components
-        self._create_components()
-
         # Set BaseModel attributes for fast evaluation (required by BaseModel)
         self.process_user_id = process_user_id
 
-    def _validate_processed_news(self) -> None:
-        """Validate processed news data integrity."""
-        required_keys = ["vocab_size", "embeddings", "num_categories", "num_subcategories"]
-        for key in required_keys:
-            if key not in self.processed_news:
-                raise ValueError(f"Missing required key '{key}' in processed_news")
+        # Initialize model components (will be created in build)
+        self.embedding_layer = None
+        self.news_encoder = None
+        self.user_encoder = None
+        self.scorer = None
+        self.training_model = None
+        self.scorer_model = None
 
-        embeddings_matrix = self.processed_news["embeddings"]
-        if np.isnan(embeddings_matrix).any():
-            raise ValueError("Embeddings matrix contains NaN values")
+        # Build the model immediately with dummy input shape
+        dummy_input_shape = {
+            "hist_tokens": (None, max_history_length, max_title_length),
+            "cand_tokens": (None, max_impressions_length, max_title_length),
+            "hist_abstract_tokens": (None, max_history_length, max_abstract_length),
+            "cand_abstract_tokens": (None, max_impressions_length, max_abstract_length),
+            "hist_category": (None, max_history_length, 1),
+            "hist_subcategory": (None, max_history_length, 1),
+            "cand_category": (None, max_impressions_length, 1),
+            "cand_subcategory": (None, max_impressions_length, 1),
+        }
+        self.build(dummy_input_shape)
 
-        if embeddings_matrix.shape[1] != self.config.embedding_size:
-            raise ValueError(
-                f"Embeddings dimension {embeddings_matrix.shape[1]} doesn't match "
-                f"configured embedding_size {self.config.embedding_size}"
-            )
-
-    def _create_components(self) -> None:
-        """Create all model components in proper order."""
-        # Set random seed
-        keras.utils.set_random_seed(self.config.seed)
-
+    def build(self, input_shape) -> None:
+        """Create all model components."""
         # Create shared embedding layer
         self.embedding_layer = layers.Embedding(
             input_dim=self.processed_news["vocab_size"],
@@ -675,30 +672,6 @@ class NAML(BaseModel):
         # Build training and scorer models for compatibility
         self.training_model, self.scorer_model = self._build_compatibility_models()
 
-    def build(self, input_shape=None):
-        """Build the NAML model with proper layer initialization.
-        
-        This method ensures all internal layers are properly built
-        when the model is first called.
-        """
-        if self.built:
-            return
-            
-        # Build all components to ensure proper initialization
-        # Note: The components are already created in __init__, this just marks them as built
-        if hasattr(self, 'embedding_layer'):
-            self.embedding_layer.build((None,))  # Build with variable batch size
-        
-        if hasattr(self, 'news_encoder') and hasattr(self.news_encoder, 'build'):
-            self.news_encoder.build((None, self.config.max_title_length + self.config.max_abstract_length + 2))
-            
-        if hasattr(self, 'user_encoder') and hasattr(self.user_encoder, 'build'):
-            self.user_encoder.build((None, self.config.max_history_length, 
-                                   self.config.max_title_length + self.config.max_abstract_length + 2))
-            
-        if hasattr(self, 'scorer') and hasattr(self.scorer, 'build'):
-            self.scorer.build(None)
-        
         super().build(input_shape)
 
     def _build_compatibility_models(self) -> Tuple[keras.Model, keras.Model]:

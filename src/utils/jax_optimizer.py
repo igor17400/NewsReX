@@ -1,7 +1,7 @@
 """JAX optimization utilities to improve training performance."""
 
-import os
 import jax
+import jax.numpy as jnp
 import logging
 
 logger = logging.getLogger(__name__)
@@ -35,26 +35,45 @@ def warmup_jit_compilation(model, sample_batch):
         # If the model has internal models, warm them up too
         if hasattr(model, 'training_model') and model.training_model is not None:
             # For training model, we need to prepare the proper input format
-            if 'hist_tokens' in inputs and 'cand_tokens' in inputs:
-                # Concatenate history inputs
-                history_concat = jax.numpy.concatenate([
-                    inputs["hist_tokens"],
-                    inputs["hist_abstract_tokens"],
-                    jax.numpy.expand_dims(inputs["hist_category"], axis=-1),
-                    jax.numpy.expand_dims(inputs["hist_subcategory"], axis=-1),
-                ], axis=-1)
 
-                # Concatenate candidate inputs
-                candidate_concat = jax.numpy.concatenate([
-                    inputs["cand_tokens"],
-                    inputs["cand_abstract_tokens"],
-                    jax.numpy.expand_dims(inputs["cand_category"], axis=-1),
-                    jax.numpy.expand_dims(inputs["cand_subcategory"], axis=-1),
-                ], axis=-1)
+            # Our base keys
+            base_hist_key = "hist_tokens"
+            base_cand_key = "cand_tokens"
 
-                # Warm up training model with concatenated inputs
-                _ = model.training_model([history_concat, candidate_concat], training=False)
-                _ = model.training_model([history_concat, candidate_concat], training=True)
+            # A list of optional key pairs to check for.
+            optional_key_pairs = [
+                ("hist_abstract_tokens", "cand_abstract_tokens"),
+                ("hist_category", "cand_category"),
+                ("hist_subcategory", "cand_subcategory"),
+            ]
+
+            # Check if the base tokens exist. If not, we can't proceed.
+            if base_hist_key not in inputs or base_cand_key not in inputs:
+                print("Warning: Base tokens are missing. Cannot perform concatenation.")
+                return None, None
+
+            # Start with the base tokens as the initial arrays to concatenate.
+            history_to_concat = [inputs[base_hist_key]]
+            candidate_to_concat = [inputs[base_cand_key]]
+
+            # Iterate through the optional keys and add them if they exist.
+            for hist_key, cand_key in optional_key_pairs:
+                if hist_key in inputs and cand_key in inputs:
+                    # Check if we need to expand dimensions for scalar values.
+                    if inputs[hist_key].ndim == 1:
+                        history_to_concat.append(jnp.expand_dims(inputs[hist_key], axis=-1))
+                        candidate_to_concat.append(jnp.expand_dims(inputs[cand_key], axis=-1))
+                    else:
+                        history_to_concat.append(inputs[hist_key])
+                        candidate_to_concat.append(inputs[cand_key])
+
+            # Perform the concatenation.
+            history_concat = jnp.concatenate(history_to_concat, axis=-1)
+            candidate_concat = jnp.concatenate(candidate_to_concat, axis=-1)
+
+            # Warm up training model with concatenated inputs
+            _ = model.training_model([history_concat, candidate_concat], training=False)
+            _ = model.training_model([history_concat, candidate_concat], training=True)
 
         if hasattr(model, 'scorer_model') and model.scorer_model is not None:
             # Scorer model warmup - it has different input shapes

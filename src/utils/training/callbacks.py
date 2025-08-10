@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, Any, Optional
+import time
 import wandb
 
 import keras
@@ -41,11 +42,21 @@ class FastEvaluationCallback(keras.callbacks.Callback):
             "patience": cfg.train.early_stopping.patience,
         }
         self.wait = 0
+        
+        # Epoch timing
+        self.epoch_start_time = None
+    
+    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
+        """Record epoch start time."""
+        self.epoch_start_time = time.time()
 
     def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
         """Run fast evaluation at the end of each epoch."""
         if not self.cfg.eval.fast_evaluation:
             return
+        
+        # Calculate epoch duration
+        epoch_duration = time.time() - self.epoch_start_time if self.epoch_start_time else 0
 
         # Create mode-specific directory for predictions
         mode_specific_dir = self.predictions_save_dir / "val" if self.predictions_save_dir else None
@@ -67,11 +78,19 @@ class FastEvaluationCallback(keras.callbacks.Callback):
 
         # Log metrics to console
         log_metrics_to_console_fn(val_metrics, f"Epoch {epoch + 1} Validation")
+        
+        # Log epoch timing to console
+        console.log(f"[dim]Epoch {epoch + 1} completed in {epoch_duration:.2f} seconds ({epoch_duration/60:.2f} minutes)[/dim]")
 
         # Log to WandB if enabled
         if wandb.run and self.wandb_history is not None:
+            # Add epoch timing to metrics
+            metrics_with_timing = {f"val/{k}": v for k, v in val_metrics.items()}
+            metrics_with_timing["epoch_duration_seconds"] = epoch_duration
+            metrics_with_timing["epoch_duration_minutes"] = epoch_duration / 60.0
+            
             log_metrics_to_wandb_fn(
-                {f"val/{k}": v for k, v in val_metrics.items()},
+                metrics_with_timing,
                 epoch + 1,
                 self.wandb_history,
             )
@@ -172,11 +191,21 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
             "patience": cfg.train.early_stopping.patience,
         }
         self.wait = 0
+        
+        # Epoch timing
+        self.epoch_start_time = None
+    
+    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
+        """Record epoch start time."""
+        self.epoch_start_time = time.time()
 
     def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
         """Run slow evaluation at the end of each epoch."""
         if self.cfg.eval.fast_evaluation:
             return
+        
+        # Calculate epoch duration
+        epoch_duration = time.time() - self.epoch_start_time if self.epoch_start_time else 0
 
         # Create mode-specific directory for predictions
         mode_specific_dir = self.predictions_save_dir / "val" if self.predictions_save_dir else None
@@ -197,11 +226,19 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
 
         # Log metrics to console
         log_metrics_to_console_fn(val_metrics, f"Epoch {epoch + 1} Validation")
+        
+        # Log epoch timing to console
+        console.log(f"[dim]Epoch {epoch + 1} completed in {epoch_duration:.2f} seconds ({epoch_duration/60:.2f} minutes)[/dim]")
 
         # Log to WandB if enabled
         if wandb.run and self.wandb_history is not None:
+            # Add epoch timing to metrics
+            metrics_with_timing = {f"val/{k}": v for k, v in val_metrics.items()}
+            metrics_with_timing["epoch_duration_seconds"] = epoch_duration
+            metrics_with_timing["epoch_duration_minutes"] = epoch_duration / 60.0
+            
             log_metrics_to_wandb_fn(
-                {f"val/{k}": v for k, v in val_metrics.items()},
+                metrics_with_timing,
                 epoch + 1,
                 self.wandb_history,
             )
@@ -287,6 +324,8 @@ class RichProgressCallback(keras.callbacks.Callback):
         self.overall_task = None
         self.epoch_task = None
         self.current_epoch = 0
+        self.epoch_start_time = None
+        self.epoch_times = []
 
     def on_train_begin(self, logs=None):
         """Initialize overall progress tracking."""
@@ -298,6 +337,7 @@ class RichProgressCallback(keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         """Initialize epoch progress tracking."""
         self.current_epoch = epoch
+        self.epoch_start_time = time.time()
 
         # Use the provided steps_per_epoch if available
         total_steps = self.steps_per_epoch
@@ -320,15 +360,29 @@ class RichProgressCallback(keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         """Clean up epoch progress and update overall progress."""
+        # Calculate epoch duration
+        if self.epoch_start_time:
+            epoch_duration = time.time() - self.epoch_start_time
+            self.epoch_times.append(epoch_duration)
+            avg_epoch_time = sum(self.epoch_times) / len(self.epoch_times)
+            remaining_epochs = self.num_epochs - (epoch + 1)
+
         if self.epoch_task is not None:
             self.progress_manager.remove_task(self.epoch_task)
             self.epoch_task = None
 
         if self.overall_task is not None:
+            if self.epoch_start_time and remaining_epochs > 0:
+                description = f"Completed Epoch {epoch + 1}/{self.num_epochs} (Last: {epoch_duration:.1f}s, Avg: {avg_epoch_time:.1f}s)"
+            elif self.epoch_start_time:
+                description = f"Completed Epoch {epoch + 1}/{self.num_epochs} (Last: {epoch_duration:.1f}s, Avg: {avg_epoch_time:.1f}s)"
+            else:
+                description = f"Completed Epoch {epoch + 1}/{self.num_epochs}"
+            
             self.progress_manager.update(
                 self.overall_task,
                 advance=1,
-                description=f"Completed Epoch {epoch + 1}/{self.num_epochs}"
+                description=description
             )
 
     def on_train_end(self, logs=None):
