@@ -8,7 +8,7 @@ from omegaconf import DictConfig
 from rich.console import Console
 from rich.progress import Progress
 
-from .callbacks import FastEvaluationCallback, SlowEvaluationCallback, RichProgressCallback, ComprehensiveTimingCallback
+from .callbacks import FastEvaluationCallback, SlowEvaluationCallback, RichProgressCallback, ComprehensiveTimingCallback, TrainingMetricsCallback
 from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from src.utils.evaluation import (
     _run_initial_validation,
@@ -229,7 +229,11 @@ def training_loop_orchestrator(
         except:
             steps_per_epoch = None
 
-    # Add comprehensive timing callback
+    # Add training metrics callback (handles training loss + training epoch timing)
+    training_metrics_callback = TrainingMetricsCallback(timing_metrics=timing_metrics, wandb_history=wandb_history)
+    callbacks.append(training_metrics_callback)
+
+    # Add comprehensive timing callback (handles overall training phase timing)
     timing_callback = ComprehensiveTimingCallback(timing_metrics=timing_metrics, wandb_history=wandb_history)
     callbacks.append(timing_callback)
 

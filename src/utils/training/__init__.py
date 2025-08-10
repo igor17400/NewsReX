@@ -1,7 +1,7 @@
 """Training utilities for the BTC news recommendation framework."""
 
 from .orchestration import training_loop_orchestrator
-from .callbacks import FastEvaluationCallback, SlowEvaluationCallback, ComprehensiveTimingCallback
+from .callbacks import FastEvaluationCallback, SlowEvaluationCallback, ComprehensiveTimingCallback, TrainingMetricsCallback
 from .engine import test_step_fn
 
 __all__ = [
@@ -9,5 +9,6 @@ __all__ = [
     "FastEvaluationCallback", 
     "SlowEvaluationCallback",
     "ComprehensiveTimingCallback",
+    "TrainingMetricsCallback",
     "test_step_fn"
 ]

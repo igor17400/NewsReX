@@ -323,14 +323,56 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
         self.best_model_path = best_model_path
 
 
-class ComprehensiveTimingCallback(keras.callbacks.Callback):
-    """Callback to track detailed timing metrics for training epochs."""
+class TrainingMetricsCallback(keras.callbacks.Callback):
+    """Callback to track and log training metrics (loss + timing) per epoch."""
     
     def __init__(self, timing_metrics: Dict[str, Any], wandb_history: Optional[Dict[str, Any]] = None):
         super().__init__()
         self.timing_metrics = timing_metrics
         self.wandb_history = wandb_history or {}
         self.epoch_training_start_time = None
+    
+    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
+        """Record epoch training start time."""
+        self.epoch_training_start_time = time.time()
+    
+    def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
+        """Record and log epoch training metrics."""
+        # Calculate epoch training time (excluding validation)
+        epoch_training_time = 0
+        if self.epoch_training_start_time:
+            epoch_training_time = time.time() - self.epoch_training_start_time
+            self.timing_metrics["epoch_training_times"].append(epoch_training_time)
+        
+        # Extract training loss from logs
+        training_loss = logs.get('loss', 0.0) if logs else 0.0
+        
+        # Log training metrics to console
+        console.log(f"[dim]⏱️ Epoch {epoch + 1} training: {epoch_training_time:.2f}s ({epoch_training_time/60:.2f}min) | Loss: {training_loss:.4f}[/dim]")
+        
+        # Log to WandB if enabled
+        if wandb.run and self.wandb_history is not None:
+            training_metrics = {
+                "train/loss": training_loss,
+                "train/epoch_training_time_seconds": epoch_training_time,
+                "train/epoch_training_time_minutes": epoch_training_time / 60.0,
+            }
+            
+            # Log training metrics to WandB
+            wandb.log(training_metrics, step=epoch + 1)
+            
+            # Store in wandb_history for consistency
+            for key, value in training_metrics.items():
+                self.wandb_history[f"epoch_{epoch + 1}_{key}"] = value
+
+
+class ComprehensiveTimingCallback(keras.callbacks.Callback):
+    """Callback to track overall experiment timing phases."""
+    
+    def __init__(self, timing_metrics: Dict[str, Any], wandb_history: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.timing_metrics = timing_metrics
+        self.wandb_history = wandb_history or {}
         self.training_phase_start_time = None
     
     def on_train_begin(self, logs: Optional[Dict[str, float]] = None):
@@ -338,21 +380,8 @@ class ComprehensiveTimingCallback(keras.callbacks.Callback):
         self.training_phase_start_time = time.time()
         console.log("[bold blue]🏋️ Training phase started![/bold blue]")
     
-    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
-        """Record epoch training start time."""
-        self.epoch_training_start_time = time.time()
-    
-    def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
-        """Record epoch training time (excluding validation)."""
-        if self.epoch_training_start_time:
-            epoch_training_time = time.time() - self.epoch_training_start_time
-            self.timing_metrics["epoch_training_times"].append(epoch_training_time)
-            
-            # Log epoch training time
-            console.log(f"[dim]⏱️ Epoch {epoch + 1} training time: {epoch_training_time:.2f}s ({epoch_training_time/60:.2f}min)[/dim]")
-    
     def on_train_end(self, logs: Optional[Dict[str, float]] = None):
-        """Calculate total training time."""
+        """Calculate total training time and summary statistics."""
         if self.training_phase_start_time:
             self.timing_metrics["total_training_time"] = time.time() - self.training_phase_start_time
             
@@ -375,8 +404,6 @@ class RichProgressCallback(keras.callbacks.Callback):
         self.overall_task = None
         self.epoch_task = None
         self.current_epoch = 0
-        self.epoch_start_time = None
-        self.epoch_times = []
 
     def on_train_begin(self, logs=None):
         """Initialize overall progress tracking."""
@@ -388,7 +415,6 @@ class RichProgressCallback(keras.callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         """Initialize epoch progress tracking."""
         self.current_epoch = epoch
-        self.epoch_start_time = time.time()
 
         # Use the provided steps_per_epoch if available
         total_steps = self.steps_per_epoch
@@ -411,24 +437,12 @@ class RichProgressCallback(keras.callbacks.Callback):
 
     def on_epoch_end(self, epoch, logs=None):
         """Clean up epoch progress and update overall progress."""
-        # Calculate epoch duration
-        if self.epoch_start_time:
-            epoch_duration = time.time() - self.epoch_start_time
-            self.epoch_times.append(epoch_duration)
-            avg_epoch_time = sum(self.epoch_times) / len(self.epoch_times)
-            remaining_epochs = self.num_epochs - (epoch + 1)
-
         if self.epoch_task is not None:
             self.progress_manager.remove_task(self.epoch_task)
             self.epoch_task = None
 
         if self.overall_task is not None:
-            if self.epoch_start_time and remaining_epochs > 0:
-                description = f"Completed Epoch {epoch + 1}/{self.num_epochs} (Last: {epoch_duration:.1f}s, Avg: {avg_epoch_time:.1f}s)"
-            elif self.epoch_start_time:
-                description = f"Completed Epoch {epoch + 1}/{self.num_epochs} (Last: {epoch_duration:.1f}s, Avg: {avg_epoch_time:.1f}s)"
-            else:
-                description = f"Completed Epoch {epoch + 1}/{self.num_epochs}"
+            description = f"Completed Epoch {epoch + 1}/{self.num_epochs}"
             
             self.progress_manager.update(
                 self.overall_task,
