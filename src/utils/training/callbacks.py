@@ -27,6 +27,7 @@ class FastEvaluationCallback(keras.callbacks.Callback):
             progress_bar_manager: Progress,
             predictions_save_dir: Optional[Path] = None,
             wandb_history: Optional[Dict[str, Any]] = None,
+            timing_metrics: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         self.dataset_provider = dataset_provider
@@ -35,6 +36,7 @@ class FastEvaluationCallback(keras.callbacks.Callback):
         self.progress_bar_manager = progress_bar_manager
         self.predictions_save_dir = predictions_save_dir
         self.wandb_history = wandb_history or {}
+        self.timing_metrics = timing_metrics or {}
 
         # Best epoch tracking
         self.best_epoch_metrics = {
@@ -43,20 +45,16 @@ class FastEvaluationCallback(keras.callbacks.Callback):
         }
         self.wait = 0
         
-        # Epoch timing
-        self.epoch_start_time = None
+        # Validation timing
+        self.validation_start_time = None
     
-    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
-        """Record epoch start time."""
-        self.epoch_start_time = time.time()
-
     def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
         """Run fast evaluation at the end of each epoch."""
         if not self.cfg.eval.fast_evaluation:
             return
         
-        # Calculate epoch duration
-        epoch_duration = time.time() - self.epoch_start_time if self.epoch_start_time else 0
+        # Start validation timing
+        self.validation_start_time = time.time()
 
         # Create mode-specific directory for predictions
         mode_specific_dir = self.predictions_save_dir / "val" if self.predictions_save_dir else None
@@ -76,18 +74,25 @@ class FastEvaluationCallback(keras.callbacks.Callback):
             epoch=epoch,
         )
 
+        # Calculate validation duration
+        validation_duration = time.time() - self.validation_start_time if self.validation_start_time else 0
+        
+        # Store validation timing
+        if "epoch_validation_times" in self.timing_metrics:
+            self.timing_metrics["epoch_validation_times"].append(validation_duration)
+
         # Log metrics to console
         log_metrics_to_console_fn(val_metrics, f"Epoch {epoch + 1} Validation")
         
-        # Log epoch timing to console
-        console.log(f"[dim]Epoch {epoch + 1} completed in {epoch_duration:.2f} seconds ({epoch_duration/60:.2f} minutes)[/dim]")
+        # Log validation timing to console
+        console.log(f"[dim]🔍 Epoch {epoch + 1} validation time: {validation_duration:.2f}s ({validation_duration/60:.2f}min)[/dim]")
 
         # Log to WandB if enabled
         if wandb.run and self.wandb_history is not None:
-            # Add epoch timing to metrics
+            # Add validation timing to metrics
             metrics_with_timing = {f"val/{k}": v for k, v in val_metrics.items()}
-            metrics_with_timing["epoch_duration_seconds"] = epoch_duration
-            metrics_with_timing["epoch_duration_minutes"] = epoch_duration / 60.0
+            metrics_with_timing["validation_duration_seconds"] = validation_duration
+            metrics_with_timing["validation_duration_minutes"] = validation_duration / 60.0
             
             log_metrics_to_wandb_fn(
                 metrics_with_timing,
@@ -176,6 +181,7 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
             progress_bar_manager: Progress,
             predictions_save_dir: Optional[Path] = None,
             wandb_history: Optional[Dict[str, Any]] = None,
+            timing_metrics: Optional[Dict[str, Any]] = None,
     ):
         super().__init__()
         self.dataset_provider = dataset_provider
@@ -184,6 +190,7 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
         self.progress_bar_manager = progress_bar_manager
         self.predictions_save_dir = predictions_save_dir
         self.wandb_history = wandb_history or {}
+        self.timing_metrics = timing_metrics or {}
 
         # Best epoch tracking
         self.best_epoch_metrics = {
@@ -192,20 +199,16 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
         }
         self.wait = 0
         
-        # Epoch timing
-        self.epoch_start_time = None
-    
-    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
-        """Record epoch start time."""
-        self.epoch_start_time = time.time()
+        # Validation timing
+        self.validation_start_time = None
 
     def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
         """Run slow evaluation at the end of each epoch."""
         if self.cfg.eval.fast_evaluation:
             return
         
-        # Calculate epoch duration
-        epoch_duration = time.time() - self.epoch_start_time if self.epoch_start_time else 0
+        # Start validation timing
+        self.validation_start_time = time.time()
 
         # Create mode-specific directory for predictions
         mode_specific_dir = self.predictions_save_dir / "val" if self.predictions_save_dir else None
@@ -224,18 +227,25 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
             epoch_idx=epoch,
         )
 
+        # Calculate validation duration
+        validation_duration = time.time() - self.validation_start_time if self.validation_start_time else 0
+        
+        # Store validation timing
+        if "epoch_validation_times" in self.timing_metrics:
+            self.timing_metrics["epoch_validation_times"].append(validation_duration)
+
         # Log metrics to console
         log_metrics_to_console_fn(val_metrics, f"Epoch {epoch + 1} Validation")
         
-        # Log epoch timing to console
-        console.log(f"[dim]Epoch {epoch + 1} completed in {epoch_duration:.2f} seconds ({epoch_duration/60:.2f} minutes)[/dim]")
+        # Log validation timing to console
+        console.log(f"[dim]🔍 Epoch {epoch + 1} validation time: {validation_duration:.2f}s ({validation_duration/60:.2f}min)[/dim]")
 
         # Log to WandB if enabled
         if wandb.run and self.wandb_history is not None:
-            # Add epoch timing to metrics
+            # Add validation timing to metrics
             metrics_with_timing = {f"val/{k}": v for k, v in val_metrics.items()}
-            metrics_with_timing["epoch_duration_seconds"] = epoch_duration
-            metrics_with_timing["epoch_duration_minutes"] = epoch_duration / 60.0
+            metrics_with_timing["validation_duration_seconds"] = validation_duration
+            metrics_with_timing["validation_duration_minutes"] = validation_duration / 60.0
             
             log_metrics_to_wandb_fn(
                 metrics_with_timing,
@@ -311,6 +321,47 @@ class SlowEvaluationCallback(keras.callbacks.Callback):
     def set_model_save_path(self, best_model_path: Path):
         """Set the path where the best model should be saved."""
         self.best_model_path = best_model_path
+
+
+class ComprehensiveTimingCallback(keras.callbacks.Callback):
+    """Callback to track detailed timing metrics for training epochs."""
+    
+    def __init__(self, timing_metrics: Dict[str, Any], wandb_history: Optional[Dict[str, Any]] = None):
+        super().__init__()
+        self.timing_metrics = timing_metrics
+        self.wandb_history = wandb_history or {}
+        self.epoch_training_start_time = None
+        self.training_phase_start_time = None
+    
+    def on_train_begin(self, logs: Optional[Dict[str, float]] = None):
+        """Record training phase start time."""
+        self.training_phase_start_time = time.time()
+        console.log("[bold blue]🏋️ Training phase started![/bold blue]")
+    
+    def on_epoch_begin(self, epoch: int, logs: Optional[Dict[str, float]] = None):
+        """Record epoch training start time."""
+        self.epoch_training_start_time = time.time()
+    
+    def on_epoch_end(self, epoch: int, logs: Optional[Dict[str, float]] = None):
+        """Record epoch training time (excluding validation)."""
+        if self.epoch_training_start_time:
+            epoch_training_time = time.time() - self.epoch_training_start_time
+            self.timing_metrics["epoch_training_times"].append(epoch_training_time)
+            
+            # Log epoch training time
+            console.log(f"[dim]⏱️ Epoch {epoch + 1} training time: {epoch_training_time:.2f}s ({epoch_training_time/60:.2f}min)[/dim]")
+    
+    def on_train_end(self, logs: Optional[Dict[str, float]] = None):
+        """Calculate total training time."""
+        if self.training_phase_start_time:
+            self.timing_metrics["total_training_time"] = time.time() - self.training_phase_start_time
+            
+            # Calculate average epoch training time
+            if self.timing_metrics["epoch_training_times"]:
+                avg_epoch_training_time = sum(self.timing_metrics["epoch_training_times"]) / len(self.timing_metrics["epoch_training_times"])
+                console.log(f"[bold cyan]📊 Average epoch training time: {avg_epoch_training_time:.2f}s ({avg_epoch_training_time/60:.2f}min)[/bold cyan]")
+            
+            console.log(f"[bold green]✅ Training phase completed! Total training time: {self.timing_metrics['total_training_time']:.2f}s ({self.timing_metrics['total_training_time']/60:.2f}min)[/bold green]")
 
 
 class RichProgressCallback(keras.callbacks.Callback):
