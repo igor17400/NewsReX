@@ -54,13 +54,19 @@ model:
   feedforward_dim: 512
   num_layers: 2
   
-  # ISAB (Induced Set Attention Block) parameters
-  isab_num_heads: 4
-  isab_num_inducing_points: 4
-  
-  # GraphSAGE parameters
+  # GNN parameters
+  gnn_type: 'graphsage'  # Options: 'graphsage' or 'gat'
   graph_hidden_dim: 300
   graph_num_layers: 1
+  
+  # GAT-specific parameters (used when gnn_type='gat')
+  gat_num_heads: 4
+  gat_alpha: 0.2  # LeakyReLU negative slope for attention mechanism
+  gat_concat_heads: true  # Whether to concatenate or average multi-head outputs
+  
+  # GraphSAGE-specific parameters (used when gnn_type='graphsage')
+  sage_aggregator: 'mean'  # Options: 'mean', 'max', 'sum', 'attention'
+  sage_normalize: true  # Whether to L2-normalize the output embeddings
   
   # Common parameters
   dropout_rate: 0.2
@@ -76,8 +82,9 @@ model:
   process_subcategory: true # CROWN uses subcategory information
   
   loss:
-    name: "categorical_crossentropy" # Options: categorical_crossentropy, binary_crossentropy
-    from_logits: false # CROWN outputs probabilities after softmax
+    name: "crown_combined" # Combined loss with auxiliary category prediction
+    alpha: 0.3 # Weight for auxiliary category prediction loss (same as intent alpha)
+    num_categories: 18 # Number of news categories in MIND dataset
     reduction: "sum_over_batch_size"
     label_smoothing: 0.0
 
@@ -106,4 +113,4 @@ sampling:
 
 device:
   gpu_ids: [ 0 ] # Use first GPU
-  mixed_precision: false
+  precision: "float16"  # Options: "float32", "float16", "bfloat16"
