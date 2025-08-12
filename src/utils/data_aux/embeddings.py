@@ -73,10 +73,11 @@ class EmbeddingsManager:
                 for line in f:
                     try:
                         values = line.split()
-                        # Join all elements except the last 300 as the word
-                        word = "".join(values[:-dim])
-                        # Take last 300 elements as the embedding
-                        vector = np.asarray(values[-dim:], dtype=self.float_dtype.as_numpy_dtype)
+                        # Handle the case where the word might contain spaces
+                        # Join all elements except the last `dim` as the word
+                        word = " ".join(values[:-dim])
+                        # Take last `dim` elements as the embedding
+                        vector = np.asarray(values[-dim:], dtype=self.float_dtype)
                         self.glove_embeddings[word] = vector
                         progress.advance(task, len(line.encode("utf-8")))
                     except Exception as e:
