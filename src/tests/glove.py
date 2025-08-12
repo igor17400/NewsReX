@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 def diagnose_glove_loading():
     """Diagnose GloVe embeddings loading issue."""
     
-    # Initialize cache manager
-    cache_manager = CacheManager(cache_dir="data")
+    # Initialize cache manager with default .cache directory
+    cache_manager = CacheManager()  # Uses default .cache directory
     logger.info(f"Cache directory: {cache_manager.cache_dir}")
     
     # Check if GloVe directory exists

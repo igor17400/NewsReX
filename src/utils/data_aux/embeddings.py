@@ -48,14 +48,27 @@ class EmbeddingsManager:
 
         # Try to load from .npy if it exists
         if npy_file.exists():
-            logger.info("Loading GloVe embeddings from .npy file...")
-            self.glove_embeddings = np.load(npy_file, allow_pickle=True).item()
-            if self.glove_embeddings:
-                logger.info(f"Loaded {len(self.glove_embeddings):,} word vectors from .npy")
-
-            # Create embedding matrix
-            self._create_embedding_matrix(dim)
-            return
+            logger.info(f"Loading GloVe embeddings from .npy file: {npy_file}")
+            try:
+                loaded_data = np.load(npy_file, allow_pickle=True)
+                if hasattr(loaded_data, 'item'):
+                    self.glove_embeddings = loaded_data.item()
+                else:
+                    self.glove_embeddings = loaded_data
+                    
+                if self.glove_embeddings and isinstance(self.glove_embeddings, dict):
+                    logger.info(f"Loaded {len(self.glove_embeddings):,} word vectors from .npy")
+                    # Create embedding matrix
+                    self._create_embedding_matrix(dim)
+                    return
+                else:
+                    logger.error(f"Loaded data is not a valid dictionary. Type: {type(self.glove_embeddings)}")
+                    self.glove_embeddings = None
+            except Exception as e:
+                logger.error(f"Failed to load .npy file: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                self.glove_embeddings = None
 
         # Check if txt file exists, if not download
         if not txt_file.exists():
@@ -165,15 +178,20 @@ class EmbeddingsManager:
             - A dictionary mapping words to their indices in the embedding tensor.
         """
         if self.glove_embeddings is None:
+            logger.info(f"GloVe embeddings not loaded yet, loading with dim={dim}...")
             self.load_glove(dim)
 
         if self.glove_embeddings is None:  # Still None after trying to load
-            logger.error("GloVe embeddings could not be loaded.")
+            logger.error("GloVe embeddings could not be loaded after calling load_glove().")
             return None, None
 
-        logger.info("Creating GloVe tensor and word-to-index map...")
-        glove_words = list(self.glove_embeddings.keys())
-        glove_vectors_list = [self.glove_embeddings[word] for word in glove_words]
+        logger.info(f"Creating GloVe tensor and word-to-index map from {len(self.glove_embeddings)} words...")
+        try:
+            glove_words = list(self.glove_embeddings.keys())
+            glove_vectors_list = [self.glove_embeddings[word] for word in glove_words]
+        except Exception as e:
+            logger.error(f"Error extracting words/vectors from glove_embeddings: {e}")
+            return None, None
 
         if not glove_vectors_list:
             logger.error("No GloVe vectors found in self.glove_embeddings.")
@@ -182,24 +200,36 @@ class EmbeddingsManager:
         # Force the creation of this very large tensor on the CPU.
         # This is a one-time setup step to get all raw GloVe vectors.
         # Placing it on CPU prevents potential GPU OOM errors when JAX tries to allocate it.
+        logger.info(f"Converting {len(glove_vectors_list)} GloVe vectors to tensor...")
         try:
             # Convert to numpy first to ensure CPU placement, then to tensor
             glove_array = np.array(glove_vectors_list, dtype=np.float32)
+            logger.info(f"Created numpy array with shape {glove_array.shape}")
             raw_glove_tensor = keras.ops.convert_to_tensor(glove_array)
+            logger.info(f"Successfully created tensor with shape {raw_glove_tensor.shape}")
         except Exception as e:
-            logger.error(f"Error converting GloVe vectors list to tensor: {e}")
+            logger.warning(f"Error converting GloVe vectors list to tensor: {e}")
             # Fallback: try creating tensor in smaller chunks to manage memory
+            logger.info("Trying chunked approach to handle memory constraints...")
             try:
                 chunk_size = 10000  # Process in chunks of 10k embeddings
                 tensor_chunks = []
+                num_chunks = (len(glove_vectors_list) + chunk_size - 1) // chunk_size
+                
                 for i in range(0, len(glove_vectors_list), chunk_size):
+                    chunk_idx = i // chunk_size + 1
+                    logger.info(f"Processing chunk {chunk_idx}/{num_chunks}...")
                     chunk = glove_vectors_list[i:i+chunk_size]
                     chunk_array = np.array(chunk, dtype=np.float32)
                     tensor_chunks.append(keras.ops.convert_to_tensor(chunk_array))
                 
+                logger.info("Concatenating chunks...")
                 raw_glove_tensor = keras.ops.concatenate(tensor_chunks, axis=0)
+                logger.info(f"Successfully created tensor with shape {raw_glove_tensor.shape}")
             except Exception as e_stack:
                 logger.error(f"Critical error: Could not create raw_glove_tensor: {e_stack}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return None, None
 
         word_to_idx_map = {word: i for i, word in enumerate(glove_words)}
