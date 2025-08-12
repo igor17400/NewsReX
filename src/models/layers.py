@@ -155,144 +155,226 @@ class OverwriteMasking(layers.Layer):
 
 
 class GraphSAGELayer(layers.Layer):
-    """GraphSAGE layer implementation for Keras 3.
+    """GraphSAGE layer implementation for CROWN paper.
     
-    This layer implements the GraphSAGE algorithm for graph neural networks,
-    adapted for use with Keras 3 and JAX backend.
+    This layer implements GraphSAGE specifically for the bipartite user-news graph
+    used in the CROWN model, with mutual updates between user and news embeddings.
     
     Args:
-        units: Output dimension
-        num_layers: Number of GraphSAGE layers to stack
-        aggregator: Type of aggregation ('mean', 'max', 'sum')
+        units: Output dimension for both user and news embeddings
+        aggregator: Type of aggregation ('mean', 'max', 'sum', 'attention')
         dropout_rate: Dropout rate
         activation: Activation function
         seed: Random seed
+        normalize: Whether to L2-normalize the output embeddings
     """
 
     def __init__(
             self,
             units,
-            num_layers=1,
             aggregator='mean',
             dropout_rate=0.0,
             activation='relu',
             seed=42,
+            normalize=True,
             **kwargs
     ):
         super().__init__(**kwargs)
         self.units = units
-        self.num_layers = num_layers
         self.aggregator = aggregator
         self.dropout_rate = dropout_rate
         self.activation = keras.activations.get(activation)
         self.seed = seed
+        self.normalize = normalize
 
     def build(self, input_shape):
-        """Build the layer weights."""
-        # Input shape: (node_features_shape, edge_index_shape)
-        node_features_shape = input_shape[0]
-        input_dim = node_features_shape[-1]
+        """Build the layer weights.
+        
+        Expected input shapes:
+        - user_features: (batch_size, num_users, user_feature_dim)
+        - news_features: (batch_size, num_news, news_feature_dim)
+        - adjacency_matrix: (batch_size, num_users + num_news, num_users + num_news)
+        """
+        if len(input_shape) != 3:
+            raise ValueError("GraphSAGELayer expects 3 inputs: (user_features, news_features, adjacency_matrix)")
 
-        # Create weights for each GraphSAGE layer
-        self.W_self = []
-        self.W_neigh = []
-        self.bias = []
+        user_features_shape, news_features_shape, _ = input_shape
+        user_dim = user_features_shape[-1]
+        news_dim = news_features_shape[-1]
 
-        for i in range(self.num_layers):
-            # Weight matrix for self features
-            self.W_self.append(
-                self.add_weight(
-                    name=f'W_self_{i}',
-                    shape=(input_dim if i == 0 else self.units, self.units),
-                    initializer=keras.initializers.GlorotUniform(seed=self.seed),
-                    trainable=True
-                )
-            )
+        # User update weights: W_user_self, W_user_neigh (from news)
+        self.W_user_self = self.add_weight(
+            name='W_user_self',
+            shape=(user_dim, self.units),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
 
-            # Weight matrix for neighbor features
-            self.W_neigh.append(
-                self.add_weight(
-                    name=f'W_neigh_{i}',
-                    shape=(input_dim if i == 0 else self.units, self.units),
-                    initializer=keras.initializers.GlorotUniform(seed=self.seed),
-                    trainable=True
-                )
-            )
+        self.W_user_neigh = self.add_weight(
+            name='W_user_neigh',
+            shape=(news_dim, self.units),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
 
-            # Bias
-            self.bias.append(
-                self.add_weight(
-                    name=f'bias_{i}',
-                    shape=(self.units,),
-                    initializer=keras.initializers.Zeros(),
-                    trainable=True
-                )
+        self.b_user = self.add_weight(
+            name='b_user',
+            shape=(self.units,),
+            initializer=keras.initializers.Zeros(),
+            trainable=True
+        )
+
+        # News update weights: W_news_self, W_news_neigh (from users)
+        self.W_news_self = self.add_weight(
+            name='W_news_self',
+            shape=(news_dim, self.units),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
+
+        self.W_news_neigh = self.add_weight(
+            name='W_news_neigh',
+            shape=(user_dim, self.units),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
+
+        self.b_news = self.add_weight(
+            name='b_news',
+            shape=(self.units,),
+            initializer=keras.initializers.Zeros(),
+            trainable=True
+        )
+
+        # Attention weights if using attention aggregator
+        if self.aggregator == 'attention':
+            self.W_att = self.add_weight(
+                name='W_att',
+                shape=(self.units * 2, 1),
+                initializer=keras.initializers.GlorotUniform(seed=self.seed),
+                trainable=True
             )
 
         self.dropout = layers.Dropout(self.dropout_rate, seed=self.seed)
         super().build(input_shape)
 
-    def aggregate_neighbors(self, node_features, adjacency_matrix):
-        """Aggregate neighbor features based on the specified method."""
-        # adjacency_matrix shape: (batch_size, num_nodes, num_nodes)
-        # node_features shape: (batch_size, num_nodes, feature_dim)
-
+    def aggregate_neighbors(self, node_features, neighbor_features, adjacency_weights):
+        """Aggregate neighbor features using specified aggregator.
+        
+        Args:
+            node_features: Features of target nodes (batch_size, num_nodes, feature_dim)
+            neighbor_features: Features of neighbor nodes (batch_size, num_neighbors, feature_dim)  
+            adjacency_weights: Adjacency weights (batch_size, num_nodes, num_neighbors)
+        
+        Returns:
+            Aggregated neighbor features (batch_size, num_nodes, feature_dim)
+        """
         if self.aggregator == 'mean':
-            # Mean aggregation
-            neighbor_sum = ops.matmul(adjacency_matrix, node_features)
-            degree = ops.sum(adjacency_matrix, axis=-1, keepdims=True)
-            degree = ops.maximum(degree, 1.0)  # Avoid division by zero
-            neighbor_features = neighbor_sum / degree
+            # Weighted mean aggregation
+            neighbor_sum = ops.matmul(adjacency_weights, neighbor_features)
+            degree = ops.sum(adjacency_weights, axis=-1, keepdims=True)
+            degree = ops.maximum(degree, keras.backend.epsilon())
+            return neighbor_sum / degree
+
         elif self.aggregator == 'max':
-            # Max aggregation - expand and use maximum
-            expanded_features = ops.expand_dims(node_features, axis=1)
-            expanded_adj = ops.expand_dims(adjacency_matrix, axis=-1)
-            masked_features = expanded_features * expanded_adj
-            neighbor_features = ops.max(masked_features, axis=2)
+            # Max aggregation with masking
+            expanded_neighbors = ops.expand_dims(neighbor_features, axis=1)  # (batch, 1, num_neighbors, dim)
+            expanded_adj = ops.expand_dims(adjacency_weights, axis=-1)  # (batch, num_nodes, num_neighbors, 1)
+            masked_features = expanded_neighbors * expanded_adj
+            # Set masked positions to large negative value for max operation
+            mask = ops.expand_dims(adjacency_weights, axis=-1) > 0
+            masked_features = ops.where(mask, masked_features, -1e9)
+            return ops.max(masked_features, axis=2)
+
         elif self.aggregator == 'sum':
             # Sum aggregation
-            neighbor_features = ops.matmul(adjacency_matrix, node_features)
+            return ops.matmul(adjacency_weights, neighbor_features)
+
+        elif self.aggregator == 'attention':
+            # Attention-based aggregation
+            num_nodes = ops.shape(node_features)[1]
+            num_neighbors = ops.shape(neighbor_features)[1]
+
+            # Expand for pairwise attention computation
+            node_exp = ops.expand_dims(node_features, axis=2)  # (batch, nodes, 1, dim)
+            neighbor_exp = ops.expand_dims(neighbor_features, axis=1)  # (batch, 1, neighbors, dim)
+
+            # Broadcast to create all pairs
+            node_broadcast = ops.broadcast_to(node_exp, (ops.shape(node_features)[0], num_nodes, num_neighbors,
+                                                         ops.shape(node_features)[2]))
+            neighbor_broadcast = ops.broadcast_to(neighbor_exp,
+                                                  (ops.shape(neighbor_features)[0], num_nodes, num_neighbors,
+                                                   ops.shape(neighbor_features)[2]))
+
+            # Concatenate and compute attention
+            concat_features = ops.concatenate([node_broadcast, neighbor_broadcast], axis=-1)
+            attention_scores = ops.squeeze(ops.matmul(concat_features, self.W_att), axis=-1)
+
+            # Apply adjacency mask and softmax
+            masked_scores = ops.where(adjacency_weights > 0, attention_scores, -1e9)
+            attention_weights = ops.softmax(masked_scores, axis=-1)
+
+            return ops.matmul(attention_weights, neighbor_features)
+
         else:
             raise ValueError(f"Unknown aggregator: {self.aggregator}")
 
-        return neighbor_features
-
     def call(self, inputs, training=None):
-        """Forward pass of GraphSAGE layer.
+        """Forward pass implementing CROWN's bipartite GraphSAGE.
         
         Args:
-            inputs: Tuple of (node_features, adjacency_matrix)
-                - node_features: (batch_size, num_nodes, feature_dim)
-                - adjacency_matrix: (batch_size, num_nodes, num_nodes)
+            inputs: Tuple of (user_features, news_features, adjacency_matrix)
+                - user_features: (batch_size, num_users, user_dim)
+                - news_features: (batch_size, num_news, news_dim)
+                - adjacency_matrix: (batch_size, num_users + num_news, num_users + num_news)
             training: Whether in training mode
             
         Returns:
-            Updated node features: (batch_size, num_nodes, units)
+            Tuple of (updated_user_features, updated_news_features)
         """
-        node_features, adjacency_matrix = inputs
-        h = node_features
+        user_features, news_features, adjacency_matrix = inputs
 
-        for i in range(self.num_layers):
-            # Aggregate neighbor features
-            h_neigh = self.aggregate_neighbors(h, adjacency_matrix)
+        batch_size = ops.shape(user_features)[0]
+        num_users = ops.shape(user_features)[1]
+        num_news = ops.shape(news_features)[1]
 
-            # Transform self and neighbor features
-            h_self = ops.matmul(h, self.W_self[i])
-            h_neigh = ops.matmul(h_neigh, self.W_neigh[i])
+        # Extract bipartite adjacency submatrices
+        # User-to-news connections: adjacency_matrix[:, :num_users, num_users:]
+        user_to_news = adjacency_matrix[:, :num_users, num_users:]
+        # News-to-user connections: adjacency_matrix[:, num_users:, :num_users]  
+        news_to_user = adjacency_matrix[:, num_users:, :num_users]
 
-            # Combine self and neighbor features
-            h = h_self + h_neigh + self.bias[i]
+        # Step 1: Update user embeddings by aggregating from connected news
+        news_for_users = self.aggregate_neighbors(user_features, news_features, user_to_news)
+        user_self = ops.matmul(user_features, self.W_user_self)
+        user_neigh = ops.matmul(news_for_users, self.W_user_neigh)
+        updated_users = self.activation(user_self + user_neigh + self.b_user)
+        updated_users = self.dropout(updated_users, training=training)
 
-            # Apply activation and dropout for all layers
-            # Remove conditional logic to avoid JAX tracing issues
-            h = self.activation(h)
-            h = self.dropout(h, training=training)
+        # Step 2: Update news embeddings by aggregating from connected users
+        users_for_news = self.aggregate_neighbors(news_features, user_features, news_to_user)
+        news_self = ops.matmul(news_features, self.W_news_self)
+        news_neigh = ops.matmul(users_for_news, self.W_news_neigh)
+        updated_news = self.activation(news_self + news_neigh + self.b_news)
+        updated_news = self.dropout(updated_news, training=training)
 
-        return h
+        # Optional L2 normalization as per GraphSAGE paper
+        if self.normalize:
+            # L2 normalize manually since ops.nn.l2_normalize doesn't exist
+            user_norm = ops.sqrt(ops.sum(ops.square(updated_users), axis=-1, keepdims=True))
+            updated_users = updated_users / (user_norm + keras.backend.epsilon())
+            
+            news_norm = ops.sqrt(ops.sum(ops.square(updated_news), axis=-1, keepdims=True))
+            updated_news = updated_news / (news_norm + keras.backend.epsilon())
+
+        return updated_users, updated_news
 
     def compute_output_shape(self, input_shape):
-        node_features_shape = input_shape[0]
-        return (node_features_shape[0], node_features_shape[1], self.units)
+        user_shape, news_shape, _ = input_shape
+        return (
+            (user_shape[0], user_shape[1], self.units),
+            (news_shape[0], news_shape[1], self.units)
+        )
 
 
 class MultiHeadAttentionBlock(layers.Layer):
@@ -362,7 +444,7 @@ class MultiHeadAttentionBlock(layers.Layer):
         q_shape = ops.shape(Q)
         k_shape = ops.shape(K)
         batch_size = q_shape[0]
-        seq_len_q = q_shape[1]  
+        seq_len_q = q_shape[1]
         seq_len_k = k_shape[1]
 
         head_dim = self.dim_out // self.num_heads
@@ -415,69 +497,247 @@ class MultiHeadAttentionBlock(layers.Layer):
         return input_shape
 
 
-class InducedSetAttentionBlock(layers.Layer):
-    """Induced Set Attention Block (ISAB) for set-based operations.
+class GraphAttentionLayer(layers.Layer):
+    """Graph Attention Network (GAT) layer implementation for CROWN paper.
     
-    This implements the ISAB layer from the Set Transformer paper, which uses
-    inducing points to reduce computational complexity.
+    This layer implements GAT specifically for the bipartite user-news graph
+    used in the CROWN model, with attention-based mutual updates between 
+    user and news embeddings.
     
     Args:
-        dim_out: Output dimension
+        units: Output dimension for both user and news embeddings
         num_heads: Number of attention heads
-        num_inducing_points: Number of inducing points
-        use_layer_norm: Whether to use layer normalization
+        dropout_rate: Dropout rate
+        activation: Activation function
+        seed: Random seed
+        use_bias: Whether to use bias in linear transformations
+        alpha: LeakyReLU negative slope for attention mechanism
+        concat_heads: Whether to concatenate or average multi-head outputs
     """
 
-    def __init__(self, dim_out, num_heads, num_inducing_points, use_layer_norm=True, seed=42, **kwargs):
+    def __init__(
+            self,
+            units,
+            num_heads=1,
+            dropout_rate=0.0,
+            activation='relu',
+            seed=42,
+            use_bias=True,
+            alpha=0.2,
+            concat_heads=True,
+            **kwargs
+    ):
         super().__init__(**kwargs)
-        self.dim_out = dim_out
+        self.units = units
         self.num_heads = num_heads
-        self.num_inducing_points = num_inducing_points
-        self.use_layer_norm = use_layer_norm
+        self.dropout_rate = dropout_rate
+        self.activation = keras.activations.get(activation)
         self.seed = seed
+        self.use_bias = use_bias
+        self.alpha = alpha  # LeakyReLU negative slope
+        self.concat_heads = concat_heads
+
+        # Compute head dimension
+        if concat_heads:
+            assert units % num_heads == 0, "units must be divisible by num_heads when concat_heads=True"
+            self.head_dim = units // num_heads
+        else:
+            self.head_dim = units
 
     def build(self, input_shape):
-        # Initialize inducing points
-        self.inducing_points = self.add_weight(
-            name='inducing_points',
-            shape=(1, self.num_inducing_points, self.dim_out),
+        """Build the GAT layer weights.
+        
+        Expected input shapes:
+        - user_features: (batch_size, num_users, user_feature_dim)
+        - news_features: (batch_size, num_news, news_feature_dim)
+        - adjacency_matrix: (batch_size, num_users + num_news, num_users + num_news)
+        """
+        if len(input_shape) != 3:
+            raise ValueError("GraphAttentionLayer expects 3 inputs: (user_features, news_features, adjacency_matrix)")
+
+        user_features_shape, news_features_shape, _ = input_shape
+        user_dim = user_features_shape[-1]
+        news_dim = news_features_shape[-1]
+
+        # User transformation weights for each attention head
+        self.W_user = self.add_weight(
+            name='W_user',
+            shape=(self.num_heads, user_dim, self.head_dim),
             initializer=keras.initializers.GlorotUniform(seed=self.seed),
             trainable=True
         )
 
-        # Create two MAB blocks
-        self.mab0 = MultiHeadAttentionBlock(self.dim_out, self.num_heads, self.use_layer_norm, self.seed)
-        self.mab1 = MultiHeadAttentionBlock(self.dim_out, self.num_heads, self.use_layer_norm, self.seed)
+        # News transformation weights for each attention head
+        self.W_news = self.add_weight(
+            name='W_news',
+            shape=(self.num_heads, news_dim, self.head_dim),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
 
+        # Attention mechanism weights
+        # For user-news attention (user as query, news as key/value)
+        self.a_user_news = self.add_weight(
+            name='a_user_news',
+            shape=(self.num_heads, self.head_dim * 2, 1),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
+
+        # For news-user attention (news as query, user as key/value)
+        self.a_news_user = self.add_weight(
+            name='a_news_user',
+            shape=(self.num_heads, self.head_dim * 2, 1),
+            initializer=keras.initializers.GlorotUniform(seed=self.seed),
+            trainable=True
+        )
+
+        # Bias terms
+        if self.use_bias:
+            self.b_user = self.add_weight(
+                name='b_user',
+                shape=(self.units if self.concat_heads else self.head_dim,),
+                initializer=keras.initializers.Zeros(),
+                trainable=True
+            )
+
+            self.b_news = self.add_weight(
+                name='b_news',
+                shape=(self.units if self.concat_heads else self.head_dim,),
+                initializer=keras.initializers.Zeros(),
+                trainable=True
+            )
+
+        self.dropout = layers.Dropout(self.dropout_rate, seed=self.seed)
         super().build(input_shape)
 
-    def call(self, inputs, training=None):
-        """Forward pass of ISAB.
+    def compute_attention(self, queries, keys, attention_weights, adjacency_mask, training=None):
+        """Compute attention scores using GAT mechanism.
         
         Args:
-            inputs: Input tensor of shape (batch_size, seq_len, dim)
+            queries: Query features (batch_size, num_heads, num_queries, head_dim)
+            keys: Key features (batch_size, num_heads, num_keys, head_dim)
+            attention_weights: Attention parameter (num_heads, head_dim * 2, 1)
+            adjacency_mask: Binary mask for valid connections (batch_size, num_queries, num_keys)
             training: Whether in training mode
             
         Returns:
-            Output tensor of shape (batch_size, seq_len, dim_out)
+            Attention coefficients (batch_size, num_heads, num_queries, num_keys)
         """
-        # Use broadcasting instead of repeat to avoid dynamic batch size issues
-        input_shape = ops.shape(inputs)
-        batch_size = input_shape[0]
-        
-        # Broadcast inducing points for batch
-        I = ops.broadcast_to(
-            ops.expand_dims(self.inducing_points, axis=0),
-            (batch_size, self.inducing_points.shape[0], self.inducing_points.shape[1])
+        batch_size = ops.shape(queries)[0]
+        num_queries = ops.shape(queries)[2]
+        num_keys = ops.shape(keys)[2]
+
+        # Expand queries and keys for pairwise computation
+        queries_exp = ops.expand_dims(queries, axis=3)  # (batch, heads, queries, 1, head_dim)
+        keys_exp = ops.expand_dims(keys, axis=2)  # (batch, heads, 1, keys, head_dim)
+
+        # Broadcast to create all query-key pairs
+        queries_broadcast = ops.broadcast_to(
+            queries_exp, (batch_size, self.num_heads, num_queries, num_keys, self.head_dim)
+        )
+        keys_broadcast = ops.broadcast_to(
+            keys_exp, (batch_size, self.num_heads, num_queries, num_keys, self.head_dim)
         )
 
-        # First MAB: attending from inducing points to input
-        H = self.mab0((I, inputs), training=training)
+        # Concatenate queries and keys
+        concat_qk = ops.concatenate([queries_broadcast, keys_broadcast], axis=-1)
 
-        # Second MAB: attending from input to inducing points
-        output = self.mab1((inputs, H), training=training)
+        # Compute attention scores for each head
+        attention_scores = ops.squeeze(
+            ops.matmul(concat_qk, ops.expand_dims(attention_weights, axis=0)), axis=-1
+        )  # (batch, heads, queries, keys)
 
-        return output
+        # Apply LeakyReLU
+        attention_scores = ops.leaky_relu(attention_scores, negative_slope=self.alpha)
+
+        # Apply adjacency mask (set invalid connections to large negative value)
+        adjacency_mask_exp = ops.expand_dims(adjacency_mask, axis=1)  # (batch, 1, queries, keys)
+        masked_scores = ops.where(
+            adjacency_mask_exp > 0, attention_scores, -1e9
+        )
+
+        # Apply softmax to get attention coefficients
+        attention_coeffs = ops.softmax(masked_scores, axis=-1)
+
+        # Apply dropout to attention coefficients
+        attention_coeffs = self.dropout(attention_coeffs, training=training)
+
+        return attention_coeffs
+
+    def call(self, inputs, training=None):
+        """Forward pass implementing CROWN's bipartite GAT.
+        
+        Args:
+            inputs: Tuple of (user_features, news_features, adjacency_matrix)
+                - user_features: (batch_size, num_users, user_dim)
+                - news_features: (batch_size, num_news, news_dim)
+                - adjacency_matrix: (batch_size, num_users + num_news, num_users + num_news)
+            training: Whether in training mode
+            
+        Returns:
+            Tuple of (updated_user_features, updated_news_features)
+        """
+        user_features, news_features, adjacency_matrix = inputs
+
+        batch_size = ops.shape(user_features)[0]
+        num_users = ops.shape(user_features)[1]
+        num_news = ops.shape(news_features)[1]
+
+        # Extract bipartite adjacency submatrices
+        user_to_news = adjacency_matrix[:, :num_users, num_users:]  # (batch, users, news)
+        news_to_user = adjacency_matrix[:, num_users:, :num_users]  # (batch, news, users)
+
+        # Transform features for each attention head
+        # User transformations: (batch, num_heads, users, head_dim)
+        user_transformed = ops.einsum('bud,hdk->bhuk', user_features, self.W_user)
+        # News transformations: (batch, num_heads, news, head_dim)
+        news_transformed = ops.einsum('bnd,hdk->bhnk', news_features, self.W_news)
+
+        # Step 1: Update user embeddings using attention over connected news
+        user_news_attention = self.compute_attention(
+            user_transformed, news_transformed, self.a_user_news, user_to_news, training=training
+        )  # (batch, heads, users, news)
+
+        # Aggregate news features for users
+        user_updates = ops.einsum('bhun,bhnk->bhuk', user_news_attention, news_transformed)
+
+        # Step 2: Update news embeddings using attention over connected users  
+        news_user_attention = self.compute_attention(
+            news_transformed, user_transformed, self.a_news_user, news_to_user, training=training
+        )  # (batch, heads, news, users)
+
+        # Aggregate user features for news
+        news_updates = ops.einsum('bhnu,bhuk->bhnk', news_user_attention, user_transformed)
+
+        # Handle multi-head outputs
+        if self.concat_heads:
+            # Concatenate heads: (batch, nodes, units)
+            updated_users = ops.reshape(user_updates, (batch_size, num_users, self.units))
+            updated_news = ops.reshape(news_updates, (batch_size, num_news, self.units))
+        else:
+            # Average heads: (batch, nodes, head_dim)
+            updated_users = ops.mean(user_updates, axis=1)
+            updated_news = ops.mean(news_updates, axis=1)
+
+        # Add bias and apply activation
+        if self.use_bias:
+            updated_users = updated_users + self.b_user
+            updated_news = updated_news + self.b_news
+
+        updated_users = self.activation(updated_users)
+        updated_news = self.activation(updated_news)
+
+        # Apply dropout
+        updated_users = self.dropout(updated_users, training=training)
+        updated_news = self.dropout(updated_news, training=training)
+
+        return updated_users, updated_news
 
     def compute_output_shape(self, input_shape):
-        return input_shape[:-1] + (self.dim_out,)
+        user_shape, news_shape, _ = input_shape
+        output_dim = self.units if self.concat_heads else self.head_dim
+        return (
+            (user_shape[0], user_shape[1], output_dim),
+            (news_shape[0], news_shape[1], output_dim)
+        )

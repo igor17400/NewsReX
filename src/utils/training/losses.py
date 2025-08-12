@@ -105,6 +105,89 @@ class BinaryCrossEntropyLoss(NewsRecommenderLoss):
         )
 
 
+class CROWNCombinedLoss(NewsRecommenderLoss):
+    """Combined loss for CROWN model with primary click prediction and auxiliary category prediction.
+    
+    This loss implements the total loss from the CROWN paper:
+    L = L_P + β * L_A
+    
+    Where:
+    - L_P is the primary click prediction loss (categorical crossentropy)
+    - L_A is the auxiliary category prediction loss
+    - β (alpha) controls the weight of the auxiliary task
+    
+    Args:
+        alpha: Weight for the auxiliary category prediction loss
+        num_categories: Number of news categories for one-hot encoding
+        name: Loss name
+        reduction: Type of reduction to apply to loss
+    """
+
+    def __init__(
+            self,
+            alpha: float = 0.3,
+            num_categories: int = 18,
+            name: str = "crown_combined_loss",
+            reduction: str = "sum_over_batch_size",
+            **kwargs: Any,
+    ) -> None:
+        super().__init__(name=name, reduction=reduction, **kwargs)
+        self.alpha = alpha
+        self.num_categories = num_categories
+
+    def call(self, y_true: keras.KerasTensor, y_pred: Any) -> keras.KerasTensor:
+        """Compute the combined CROWN loss.
+        
+        Args:
+            y_true: True labels for click prediction (one-hot encoded)
+            y_pred: Tuple of (click_scores, category_logits, category_ids) where:
+                - click_scores: Predicted click scores after softmax (batch_size, num_candidates)
+                - category_logits: Category prediction logits (batch_size * num_candidates, num_categories)
+                - category_ids: True category IDs (batch_size * num_candidates,)
+        
+        Returns:
+            Combined loss value
+        """
+        # Handle tuple output from CROWN model
+        if isinstance(y_pred, (list, tuple)):
+            click_scores = y_pred[0]
+            category_logits = y_pred[1] if len(y_pred) > 1 else None
+            category_ids = y_pred[2] if len(y_pred) > 2 else None
+        else:
+            # Fallback for models without auxiliary output
+            click_scores = y_pred
+            category_logits = None
+            category_ids = None
+
+        # Primary loss: Click prediction (categorical crossentropy)
+        primary_loss = keras.losses.categorical_crossentropy(
+            y_true, click_scores, from_logits=False
+        )
+
+        # Auxiliary loss: Category prediction (if available)
+        if category_logits is not None and category_ids is not None:
+            # Create one-hot encoding for true categories
+            category_one_hot = keras.ops.one_hot(
+                keras.ops.cast(category_ids, "int32"),
+                self.num_categories
+            )
+
+            # Compute category prediction loss
+            auxiliary_loss = keras.losses.categorical_crossentropy(
+                category_one_hot,
+                category_logits,
+                from_logits=True
+            )
+
+            # Combine losses with weight
+            total_loss = primary_loss + self.alpha * keras.ops.mean(auxiliary_loss)
+        else:
+            # No auxiliary loss available
+            total_loss = primary_loss
+
+        return total_loss
+
+
 def get_loss(loss_name: str, **kwargs: Any) -> NewsRecommenderLoss:
     """Get a loss function by name.
 
@@ -114,6 +197,8 @@ def get_loss(loss_name: str, **kwargs: Any) -> NewsRecommenderLoss:
             - from_logits: bool
             - reduction: str (one of: 'none', 'sum', 'sum_over_batch_size', 'mean', 'mean_with_sample_weight')
             - label_smoothing: float
+            - alpha: float (for CROWN combined loss)
+            - num_categories: int (for CROWN combined loss)
 
     Returns:
         Loss function instance
@@ -124,6 +209,7 @@ def get_loss(loss_name: str, **kwargs: Any) -> NewsRecommenderLoss:
     losses = {
         "categorical_crossentropy": CategoricalCrossEntropyLoss,
         "binary_crossentropy": BinaryCrossEntropyLoss,
+        "crown_combined": CROWNCombinedLoss,
     }
 
     if loss_name not in losses:
