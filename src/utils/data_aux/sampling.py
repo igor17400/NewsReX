@@ -14,17 +14,20 @@ class ImpressionSampler:
         np.random.seed(cfg.random_seed)
 
     def sample_candidates_news(
-        self,
-        stage: str,
-        candidates: List[str],
-        random_train_samples: bool = False,
-        news_info: Optional[Dict] = None,
-        timestamp: Optional[str] = None,
+            self,
+            stage: str,
+            candidates: List[str],
+            parse_news_id,
+            random_train_samples: bool = False,
+            news_info: Optional[Dict] = None,
+            timestamp: Optional[str] = None,
+            available_news_ids: Optional[set] = None,
     ) -> Tuple[List[List[int]], List[List[int]]]:
         """Sample candidate news with fixed ratio of positive to negative samples.
 
         Args:
             candidates: List of candidtes news strings in format "<news_id>-<label>"
+            parse_news_id: parser news id to int
             news_info: Optional dictionary containing news metadata
             timestamp: Optional timestamp for temporal sampling
         Returns:
@@ -37,7 +40,12 @@ class ImpressionSampler:
         negatives = []
         for can_news in candidates:
             news_id, label = can_news.split("-")
-            news_id = int(news_id.split("N")[1])
+            news_id = parse_news_id(news_id)
+            
+            # Filter out news IDs that don't exist in the news data
+            if available_news_ids is not None and news_id not in available_news_ids:
+                continue
+                
             if int(label) == 1:
                 positives.append(news_id)
             else:
@@ -69,7 +77,7 @@ class ImpressionSampler:
 
             # Combine positive and negatives
             sample = [pos] + neg_samples
-            labels = [1] + [0] * k
+            labels = [1] + [0] * len(neg_samples)
 
             if random_train_samples:
                 # Shuffle together
@@ -84,11 +92,11 @@ class ImpressionSampler:
         return all_samples, all_labels
 
     def _sample_negatives(
-        self,
-        negatives: List[int],
-        k: int,
-        news_info: Optional[Dict] = None,
-        timestamp: Optional[str] = None,
+            self,
+            negatives: List[int],
+            k: int,
+            news_info: Optional[Dict] = None,
+            timestamp: Optional[str] = None,
     ) -> List[int]:
         """Sample k negatives using the configured strategy"""
         if self.strategy == "random":
@@ -120,7 +128,7 @@ class ImpressionSampler:
             return list(np.random.choice(negatives, size=k, replace=False))
 
     def _popularity_based_negatives(
-        self, negatives: List[int], k: int, news_info: Dict
+            self, negatives: List[int], k: int, news_info: Dict
     ) -> List[int]:
         """Sample negatives based on popularity"""
         if not news_info:
