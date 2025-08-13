@@ -308,6 +308,26 @@ class NewsDatasetBase(BaseNewsDataset):
         """Get the inverse mapping from integer IDs to string news IDs."""
         return self._int_to_news_id_map
 
+    def _rebuild_id_mappings(self) -> None:
+        """Rebuild ID mappings from processed news data when loading existing files."""
+        if "news_ids_original_strings" not in self.processed_news:
+            logger.warning("No news_ids_original_strings found in processed news data")
+            return
+
+        logger.info("Rebuilding ID mappings from processed news data...")
+        news_ids = self.processed_news["news_ids_original_strings"]
+
+        # Clear existing mappings
+        self._news_id_to_int_map.clear()
+        self._int_to_news_id_map.clear()
+
+        # Rebuild mappings by parsing each news ID
+        for original_id in news_ids:
+            parsed_id = self.parse_news_id(original_id)
+            # The parse_news_id method will populate the mappings automatically
+
+        logger.info(f"Rebuilt ID mappings: {len(self._news_id_to_int_map)} news IDs mapped")
+
     def parse_user_id(self, user_id: str) -> int:
         """Parse user ID to integer, handling optional prefix."""
         if self.user_id_prefix and user_id.startswith(self.user_id_prefix):
@@ -861,6 +881,9 @@ class NewsDatasetBase(BaseNewsDataset):
 
         if not files_exist:
             self._process_data()
+        else:
+            # If files exist, we need to rebuild ID mappings since they're only created during processing
+            self._rebuild_id_mappings()
 
         logger.info("Files have already been processed, loading data...")
         try:
