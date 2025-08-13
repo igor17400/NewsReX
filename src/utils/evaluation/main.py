@@ -189,6 +189,7 @@ def _run_initial_validation(
             mode="initial_val",
             save_predictions_path=predictions_save_dir if cfg.eval.save_predictions else None,
             epoch=None,
+            int_to_news_id_map=dataset_provider.get_int_to_news_id_map(),
         )
     else:
         metrics = run_evaluation_epoch(
@@ -230,6 +231,7 @@ def _run_epoch_evaluation(
             mode="val",
             save_predictions_path=mode_specific_dir if cfg.eval.save_predictions else None,
             epoch=epoch_idx,
+            int_to_news_id_map=dataset_provider.get_int_to_news_id_map(),
         )
 
     # Create mode-specific directory for predictions
@@ -285,6 +287,7 @@ def _run_final_testing(
             mode="test",
             save_predictions_path=mode_specific_dir if cfg.eval.save_predictions else None,
             epoch=best_epoch_metrics_tracking.get("epoch_number", -1) - 1,
+            int_to_news_id_map=dataset_provider.get_int_to_news_id_map(),
         )
 
     return run_evaluation_epoch(

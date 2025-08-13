@@ -72,6 +72,7 @@ class FastEvaluationCallback(keras.callbacks.Callback):
             mode="val",
             save_predictions_path=mode_specific_dir if self.cfg.eval.save_predictions else None,
             epoch=epoch,
+            int_to_news_id_map=self.dataset_provider.get_int_to_news_id_map(),
         )
 
         # Calculate validation duration

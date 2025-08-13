@@ -240,6 +240,7 @@ class NewsDatasetBase(BaseNewsDataset):
 
         # Initialize news ID mapping for string-based IDs
         self._news_id_to_int_map = {}
+        self._int_to_news_id_map = {}  # Inverse mapping for fast lookup
         self._next_news_int_id = 0
 
         # Handle format conversion before processing news (if needed)
@@ -289,6 +290,7 @@ class NewsDatasetBase(BaseNewsDataset):
                 # String-based ID with prefix, map to integer
                 if news_id not in self._news_id_to_int_map:
                     self._news_id_to_int_map[news_id] = self._next_news_int_id
+                    self._int_to_news_id_map[self._next_news_int_id] = news_id  # Store inverse mapping
                     self._next_news_int_id += 1
                 return self._news_id_to_int_map[news_id]
 
@@ -298,8 +300,13 @@ class NewsDatasetBase(BaseNewsDataset):
             # String-based ID without prefix, map to integer
             if news_id not in self._news_id_to_int_map:
                 self._news_id_to_int_map[news_id] = self._next_news_int_id
+                self._int_to_news_id_map[self._next_news_int_id] = news_id  # Store inverse mapping
                 self._next_news_int_id += 1
             return self._news_id_to_int_map[news_id]
+
+    def get_int_to_news_id_map(self) -> Dict[int, str]:
+        """Get the inverse mapping from integer IDs to string news IDs."""
+        return self._int_to_news_id_map
 
     def parse_user_id(self, user_id: str) -> int:
         """Parse user ID to integer, handling optional prefix."""

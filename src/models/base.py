@@ -139,6 +139,7 @@ class BaseModel(keras.Model):
             mode="validate",
             save_predictions_path=None,
             epoch=None,
+            int_to_news_id_map=None,
     ) -> Dict[str, float]:
         """Fast evaluation of the model using precomputed vectors and dataloader iterators."""
         # 1. Precompute news vectors
@@ -167,7 +168,14 @@ class BaseModel(keras.Model):
             cand_ids_np = ops.convert_to_numpy(cand_ids)  # Get numpy array of candidate IDs
             news_vectors = []
             for nid in cand_ids_np:
-                news_key = f"N{str(nid)}"
+                # Convert integer ID to string news ID
+                if int_to_news_id_map and nid in int_to_news_id_map:
+                    # Use the mapping if provided (for datasets with custom IDs)
+                    news_key = int_to_news_id_map[nid]
+                else:
+                    # Default behavior for MIND dataset (add "N" prefix)
+                    news_key = f"N{str(nid)}"
+                
                 vec = news_vecs_dict.get(news_key)
                 if vec is not None:
                     news_vectors.append(vec)
