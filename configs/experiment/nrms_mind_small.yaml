@@ -59,7 +59,7 @@ eval:
 
 # Logging
 logging:
-  enable_wandb: false
+  enable_wandb: true
   project_name: "NewsReX"
   experiment_name: "nrms_mind_small"
 
