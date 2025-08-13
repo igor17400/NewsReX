@@ -320,10 +320,11 @@ class NewsDatasetBase(BaseNewsDataset):
         # Clear existing mappings
         self._news_id_to_int_map.clear()
         self._int_to_news_id_map.clear()
+        self._next_news_int_id = 0  # Reset the counter
 
         # Rebuild mappings by parsing each news ID
         for original_id in news_ids:
-            parsed_id = self.parse_news_id(original_id)
+            self.parse_news_id(original_id)
             # The parse_news_id method will populate the mappings automatically
 
         logger.info(f"Rebuilt ID mappings: {len(self._news_id_to_int_map)} news IDs mapped")
