@@ -6,7 +6,7 @@ This module contains utility functions and classes organized by their functional
 
 ### 📊 `metrics/`
 News recommendation specific metrics (AUC, MRR, nDCG) and Keras metric wrappers.
-- `functions.py` - Core metric computation functions
+- `functions_optimized.py` - Core metric computation functions
 - `wrapper.py` - Keras 3 compatible metric wrappers
 
 ### 🚀 `training/`
@@ -46,7 +46,7 @@ Import utilities from their respective subdirectories:
 
 ```python
 # Metrics
-from src.utils.metrics.functions import NewsRecommenderMetrics
+from src.utils.metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from src.utils.metrics.wrapper import create_news_metrics
 
 # Training

@@ -17,17 +17,34 @@ class BaseModel(keras.Model):
 
     def __init__(self, name: str = "base_news_recommender"):
         super().__init__(name=name)
-        
+
         # Attributes to be set by subclasses
         self.news_encoder: Optional[keras.Model] = None
-        self.user_encoder: Optional[keras.Model] = None 
+        self.user_encoder: Optional[keras.Model] = None
         self.process_user_id: bool = False
         self.float_dtype: str = "float32"  # Will be set by training config
 
+    def _validate_processed_news(self) -> None:
+        """Validate processed news data integrity."""
+        required_keys = ["vocab_size", "embeddings", "num_categories", "num_subcategories"]
+        for key in required_keys:
+            if key not in self.processed_news:
+                raise ValueError(f"Missing required key '{key}' in processed_news")
+
+        embeddings_matrix = self.processed_news["embeddings"]
+        if np.isnan(embeddings_matrix).any():
+            raise ValueError("Embeddings matrix contains NaN values")
+
+        if embeddings_matrix.shape[1] != self.config.embedding_size:
+            raise ValueError(
+                f"Embeddings dimension {embeddings_matrix.shape[1]} doesn't match "
+                f"configured embedding_size {self.config.embedding_size}"
+            )
+
     def precompute_news_vectors(
-        self,
-        news_dataloader: NewsBatchDataloader,
-        progress: Progress,
+            self,
+            news_dataloader: NewsBatchDataloader,
+            progress: Progress,
     ) -> Dict[str, np.ndarray]:
         """Precompute vectors for all news articles.
 
@@ -55,7 +72,7 @@ class BaseModel(keras.Model):
             batch_vecs = ops.convert_to_numpy(
                 self.news_encoder(news_features, training=False)
             )
-            
+
             # Debug: Check for NaN/Inf in news vectors
             if np.isnan(batch_vecs).any() or np.isinf(batch_vecs).any():
                 print(f"DEBUG: batch_vecs has NaN/Inf: {np.isnan(batch_vecs).any()}/{np.isinf(batch_vecs).any()}")
@@ -70,7 +87,7 @@ class BaseModel(keras.Model):
         return news_vecs_dict
 
     def precompute_user_vectors(
-        self, user_dataloader: UserHistoryBatchDataloader, progress: Progress
+            self, user_dataloader: UserHistoryBatchDataloader, progress: Progress
     ) -> Dict[int, np.ndarray]:
         """Pre-compute user vectors for fast evaluation.
 
@@ -91,11 +108,11 @@ class BaseModel(keras.Model):
 
         for impression_ids, user_ids, features in user_dataloader:
             # Get user representation from history
-            if self.process_user_id: # Used for LSTUR model
+            if self.process_user_id:  # Used for LSTUR model
                 user_vec = self.user_encoder([features, user_ids], training=False)
             else:
                 user_vec = self.user_encoder(features, training=False)
-            
+
             # Debug: Check for NaN/Inf in user vectors
             user_vec_np = ops.convert_to_numpy(user_vec)
             if np.isnan(user_vec_np).any() or np.isinf(user_vec_np).any():
@@ -113,15 +130,16 @@ class BaseModel(keras.Model):
         return user_vecs_dict
 
     def fast_evaluate(
-        self,
-        user_hist_dataloader,
-        news_dataloader,
-        impression_iterator,
-        metrics_calculator,
-        progress: Progress,
-        mode="validate",
-        save_predictions_path=None,
-        epoch=None,
+            self,
+            user_hist_dataloader,
+            news_dataloader,
+            impression_iterator,
+            metrics_calculator,
+            progress: Progress,
+            mode="validate",
+            save_predictions_path=None,
+            epoch=None,
+            int_to_news_id_map=None,
     ) -> Dict[str, float]:
         """Fast evaluation of the model using precomputed vectors and dataloader iterators."""
         # 1. Precompute news vectors
@@ -150,7 +168,14 @@ class BaseModel(keras.Model):
             cand_ids_np = ops.convert_to_numpy(cand_ids)  # Get numpy array of candidate IDs
             news_vectors = []
             for nid in cand_ids_np:
-                news_key = f"N{str(nid)}"
+                # Convert integer ID to string news ID
+                if int_to_news_id_map and nid in int_to_news_id_map:
+                    # Use the mapping if provided (for datasets with custom IDs)
+                    news_key = int_to_news_id_map[nid]
+                else:
+                    # Default behavior for MIND dataset (add "N" prefix)
+                    news_key = f"N{str(nid)}"
+                
                 vec = news_vecs_dict.get(news_key)
                 if vec is not None:
                     news_vectors.append(vec)
@@ -160,18 +185,21 @@ class BaseModel(keras.Model):
                 scores = np.array([])
             else:
                 news_vectors_array = np.stack(news_vectors, axis=0)
-                
+
                 # Debug: Check for NaN/Inf in user_vector and news_vectors
                 if np.isnan(user_vector).any() or np.isinf(user_vector).any():
-                    print(f"DEBUG: user_vector has NaN/Inf: {np.isnan(user_vector).any()}/{np.isinf(user_vector).any()}")
+                    print(
+                        f"DEBUG: user_vector has NaN/Inf: {np.isnan(user_vector).any()}/{np.isinf(user_vector).any()}")
                     print(f"DEBUG: user_vector min/max: {np.min(user_vector):.6f} / {np.max(user_vector):.6f}")
-                
+
                 if np.isnan(news_vectors_array).any() or np.isinf(news_vectors_array).any():
-                    print(f"DEBUG: news_vectors has NaN/Inf: {np.isnan(news_vectors_array).any()}/{np.isinf(news_vectors_array).any()}")
-                    print(f"DEBUG: news_vectors min/max: {np.min(news_vectors_array):.6f} / {np.max(news_vectors_array):.6f}")
-                
+                    print(
+                        f"DEBUG: news_vectors has NaN/Inf: {np.isnan(news_vectors_array).any()}/{np.isinf(news_vectors_array).any()}")
+                    print(
+                        f"DEBUG: news_vectors min/max: {np.min(news_vectors_array):.6f} / {np.max(news_vectors_array):.6f}")
+
                 scores = np.dot(news_vectors_array, user_vector)
-                
+
                 # Debug: Check final scores
                 if np.isnan(scores).any() or np.isinf(scores).any():
                     print(f"DEBUG: Final scores has NaN/Inf: {np.isnan(scores).any()}/{np.isinf(scores).any()}")
@@ -202,11 +230,11 @@ class BaseModel(keras.Model):
         return final_metrics
 
     def _compute_metrics(
-        self,
-        group_labels_list: List[np.ndarray],
-        group_preds_list: List[np.ndarray],
-        metrics_calculator: Any,
-        progress: Progress,
+            self,
+            group_labels_list: List[np.ndarray],
+            group_preds_list: List[np.ndarray],
+            metrics_calculator: Any,
+            progress: Progress,
     ) -> Dict[str, float]:
         """Computes and aggregates metrics from lists of labels and predictions.
 
@@ -259,7 +287,7 @@ class BaseModel(keras.Model):
                     # Fallback to categorical crossentropy if no compiled loss
                     loss = ops.categorical_crossentropy(labels_tensor, scores_probs_tensor, from_logits=False)
                     loss = ops.mean(loss)
-                    
+
                 if loss is not None:
                     val_loss_total += ops.convert_to_numpy(loss)
                     num_valid_impressions_for_loss += 1

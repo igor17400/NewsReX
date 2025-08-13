@@ -568,42 +568,30 @@ class LSTUR(BaseModel):
         self.num_users = num_users
         self._validate_processed_news()
 
-        # Initialize components
-        self._create_components()
-
         # Set BaseModel attributes for fast evaluation (required by BaseModel)
         self.process_user_id = process_user_id
-        self.float_dtype = "float32"
 
-    def _validate_processed_news(self) -> None:
-        """Validate processed news data integrity."""
-        required_keys = ["vocab_size", "embeddings"]
-        for key in required_keys:
-            if key not in self.processed_news:
-                raise ValueError(f"Missing required key '{key}' in processed_news")
+        # Initialize model components (will be created in build)
+        self.embedding_layer = None
+        self.news_encoder = None
+        self.user_encoder = None
+        self.scorer = None
+        self.training_model = None
+        self.scorer_model = None
 
-        # Check for category/subcategory data if enabled
-        if self.config.use_category and "num_categories" not in self.processed_news:
-            raise ValueError("use_category=True but 'num_categories' not found in processed_news")
+        # Build the model immediately with dummy input shape
+        dummy_input_shape = {
+            "hist_tokens": (None, max_history_length, max_title_length),
+            "cand_tokens": (None, max_impressions_length, max_title_length),
+            "hist_category": (None, max_history_length, 1),
+            "hist_subcategory": (None, max_history_length, 1),
+            "cand_category": (None, max_impressions_length, 1),
+            "cand_subcategory": (None, max_impressions_length, 1),
+        }
+        self.build(dummy_input_shape)
 
-        if self.config.use_subcategory and "num_subcategories" not in self.processed_news:
-            raise ValueError("use_subcategory=True but 'num_subcategories' not found in processed_news")
-
-        embeddings_matrix = self.processed_news["embeddings"]
-        if np.isnan(embeddings_matrix).any():
-            raise ValueError("Embeddings matrix contains NaN values")
-
-        if embeddings_matrix.shape[1] != self.config.embedding_size:
-            raise ValueError(
-                f"Embeddings dimension {embeddings_matrix.shape[1]} doesn't match "
-                f"configured embedding_size {self.config.embedding_size}"
-            )
-
-    def _create_components(self) -> None:
-        """Create all model components in proper order."""
-        # Set random seed
-        keras.utils.set_random_seed(self.config.seed)
-
+    def build(self, input_shape) -> None:
+        """Create all model components."""
         # Create shared embedding layer
         self.embedding_layer = layers.Embedding(
             input_dim=self.processed_news["vocab_size"],
@@ -640,6 +628,8 @@ class LSTUR(BaseModel):
 
         # Build training and scorer models for compatibility
         self.training_model, self.scorer_model = self._build_compatibility_models()
+
+        super().build(input_shape)
 
     def _build_compatibility_models(self) -> Tuple[keras.Model, keras.Model]:
         """Build training and scorer models for backward compatibility."""
@@ -744,6 +734,9 @@ class LSTUR(BaseModel):
             if "hist_tokens" in inputs and "cand_tokens" in inputs:
                 # Multiple candidates format
                 return self._handle_multiple_candidates(inputs)
+            elif "hist_tokens" in inputs and "single_candidate_tokens" in inputs:
+                # Single candidate format
+                return self._handle_single_candidate(inputs)
             else:
                 # Add other inference modes as needed
                 raise ValueError("Invalid input format for inference mode")
@@ -802,6 +795,37 @@ class LSTUR(BaseModel):
             )
 
         return self.scorer.score_multiple_candidates(
+            history_tokens,
+            user_ids,
+            candidate_tokens,
+            training=False
+        )
+
+    def _handle_single_candidate(self, inputs):
+        """Handle single candidate scoring with sigmoid scores."""
+        # Extract the inputs - handle both user_ids and user_indices keys
+        history_tokens = inputs["hist_tokens"]
+        user_ids = inputs.get("user_ids", inputs.get("user_indices"))
+        candidate_tokens = inputs["single_candidate_tokens"]
+
+        # Check if we have category/subcategory data
+        if "hist_category" in inputs and "hist_subcategory" in inputs:
+            # Concatenate history inputs: title + category + subcategory
+            hist_category = ops.expand_dims(inputs["hist_category"], axis=-1)
+            hist_subcategory = ops.expand_dims(inputs["hist_subcategory"], axis=-1)
+            history_tokens = ops.concatenate(
+                [history_tokens, hist_category, hist_subcategory], axis=-1
+            )
+
+            # Concatenate single candidate inputs: title + category + subcategory
+            if "single_cand_category" in inputs and "single_cand_subcategory" in inputs:
+                single_cand_category = ops.expand_dims(inputs["single_cand_category"], axis=-1)
+                single_cand_subcategory = ops.expand_dims(inputs["single_cand_subcategory"], axis=-1)
+                candidate_tokens = ops.concatenate(
+                    [candidate_tokens, single_cand_category, single_cand_subcategory], axis=-1
+                )
+
+        return self.scorer.score_single_candidate(
             history_tokens,
             user_ids,
             candidate_tokens,

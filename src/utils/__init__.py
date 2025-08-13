@@ -15,7 +15,7 @@ Submodules:
 """
 
 # Import commonly used functions at the package level for convenience
-from .metrics.functions import NewsRecommenderMetrics
+from .metrics.functions_optimized import NewsRecommenderMetricsOptimized as NewsRecommenderMetrics
 from .metrics.wrapper import create_news_metrics, LightweightNewsMetrics
 
 from .training.orchestration import training_loop_orchestrator

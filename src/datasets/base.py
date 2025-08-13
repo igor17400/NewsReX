@@ -2,7 +2,7 @@ import urllib.request
 import zipfile
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, Iterator, Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd

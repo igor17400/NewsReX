@@ -1,6 +1,5 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 from dataclasses import dataclass
-import numpy as np
 
 import keras
 from keras import layers, ops
@@ -476,10 +475,11 @@ class NAMLScorer(keras.Model):
             Softmax scores (batch_size, num_candidates)
         """
         # Get user representation from concatenated history
-        user_repr = self.user_encoder(history_inputs, training=training)
+        # Always use training=True for training batch
+        user_repr = self.user_encoder(history_inputs, training=True)
 
         # Get representations for all candidates using stored TimeDistributed layer
-        candidate_reprs = self.candidate_encoder_train(candidate_inputs, training=training)
+        candidate_reprs = self.candidate_encoder_train(candidate_inputs, training=True)
         # Result: (batch_size, num_candidates, cnn_filter_num)
 
         # Expand user representation for broadcasting
@@ -489,7 +489,8 @@ class NAMLScorer(keras.Model):
         scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)  # (batch_size, num_candidates)
 
         # Apply softmax for training
-        return ops.softmax(scores, axis=-1)
+        output = ops.softmax(scores, axis=-1)
+        return output
 
     def score_single_candidate(self, history_inputs, candidate_inputs, training=None):
         """Score single candidate with sigmoid output.
@@ -503,18 +504,19 @@ class NAMLScorer(keras.Model):
             Sigmoid scores (batch_size, 1)
         """
         # Get user representation from concatenated history
-        user_repr = self.user_encoder(history_inputs, training=training)
+        user_repr = self.user_encoder(history_inputs, training=False)
 
         # Get candidate representation from concatenated input
-        candidate_repr = self.news_encoder(candidate_inputs, training=training)
+        candidate_repr = self.news_encoder(candidate_inputs, training=False)
 
         # Calculate score using dot product
         score = ops.sum(candidate_repr * user_repr, axis=-1, keepdims=True)
 
         # Apply sigmoid for probability
-        return ops.sigmoid(score)
+        output = ops.sigmoid(score)
+        return output
 
-    def score_multiple_candidates(self, history_inputs, candidate_inputs, training=False):
+    def score_multiple_candidates(self, history_inputs, candidate_inputs, training=None):
         """Score multiple candidates with sigmoid activation.
         
         Args:
@@ -526,10 +528,10 @@ class NAMLScorer(keras.Model):
             Sigmoid scores (batch_size, num_candidates)
         """
         # Get user representation from concatenated history
-        user_repr = self.user_encoder(history_inputs, training=training)
+        user_repr = self.user_encoder(history_inputs, training=False)
 
         # Get representations for all candidates using stored TimeDistributed layer
-        candidate_reprs = self.candidate_encoder_eval(candidate_inputs, training=training)
+        candidate_reprs = self.candidate_encoder_eval(candidate_inputs, training=False)
         # Result: (batch_size, num_candidates, cnn_filter_num)
 
         # Expand user representation for broadcasting
@@ -539,7 +541,8 @@ class NAMLScorer(keras.Model):
         scores = ops.sum(candidate_reprs * user_repr_expanded, axis=-1)
 
         # Apply sigmoid activation for consistency with single candidate scoring
-        return ops.sigmoid(scores)
+        output = ops.sigmoid(scores)
+        return output
 
 
 class NAML(BaseModel):
@@ -606,42 +609,38 @@ class NAML(BaseModel):
         self.processed_news = processed_news
         self._validate_processed_news()
 
-        # Initialize components
-        self._create_components()
-
         # Set BaseModel attributes for fast evaluation (required by BaseModel)
         self.process_user_id = process_user_id
-        self.float_dtype = "float32"
 
-    def _validate_processed_news(self) -> None:
-        """Validate processed news data integrity."""
-        required_keys = ["vocab_size", "embeddings", "num_categories", "num_subcategories"]
-        for key in required_keys:
-            if key not in self.processed_news:
-                raise ValueError(f"Missing required key '{key}' in processed_news")
+        # Initialize model components (will be created in build)
+        self.embedding_layer = None
+        self.news_encoder = None
+        self.user_encoder = None
+        self.scorer = None
+        self.training_model = None
+        self.scorer_model = None
 
-        embeddings_matrix = self.processed_news["embeddings"]
-        if np.isnan(embeddings_matrix).any():
-            raise ValueError("Embeddings matrix contains NaN values")
+        # Build the model immediately with dummy input shape
+        dummy_input_shape = {
+            "hist_tokens": (None, max_history_length, max_title_length),
+            "cand_tokens": (None, max_impressions_length, max_title_length),
+            "hist_abstract_tokens": (None, max_history_length, max_abstract_length),
+            "cand_abstract_tokens": (None, max_impressions_length, max_abstract_length),
+            "hist_category": (None, max_history_length, 1),
+            "hist_subcategory": (None, max_history_length, 1),
+            "cand_category": (None, max_impressions_length, 1),
+            "cand_subcategory": (None, max_impressions_length, 1),
+        }
+        self.build(dummy_input_shape)
 
-        if embeddings_matrix.shape[1] != self.config.embedding_size:
-            raise ValueError(
-                f"Embeddings dimension {embeddings_matrix.shape[1]} doesn't match "
-                f"configured embedding_size {self.config.embedding_size}"
-            )
-
-    def _create_components(self) -> None:
-        """Create all model components in proper order."""
-        # Set random seed
-        keras.utils.set_random_seed(self.config.seed)
-
+    def build(self, input_shape) -> None:
+        """Create all model components."""
         # Create shared embedding layer
         self.embedding_layer = layers.Embedding(
             input_dim=self.processed_news["vocab_size"],
             output_dim=self.config.embedding_size,
             embeddings_initializer=keras.initializers.Constant(self.processed_news["embeddings"]),
             trainable=True,
-            mask_zero=False,
             name="word_embedding",
         )
 
@@ -672,6 +671,8 @@ class NAML(BaseModel):
 
         # Build training and scorer models for compatibility
         self.training_model, self.scorer_model = self._build_compatibility_models()
+
+        super().build(input_shape)
 
     def _build_compatibility_models(self) -> Tuple[keras.Model, keras.Model]:
         """Build training and scorer models for backward compatibility."""
@@ -796,7 +797,7 @@ class NAML(BaseModel):
             ops.expand_dims(inputs["cand_subcategory"], axis=-1),
         ], axis=-1)
 
-        return self.scorer.score_training_batch(history_concat, candidate_concat, training=True)
+        return self.scorer.score_training_batch(history_concat, candidate_concat)
 
     def _handle_multiple_candidates(self, inputs):
         """Handle multiple candidate scoring with sigmoid scores."""
@@ -816,7 +817,7 @@ class NAML(BaseModel):
             ops.expand_dims(inputs["cand_subcategory"], axis=-1),
         ], axis=-1)
 
-        return self.scorer.score_multiple_candidates(history_concat, candidate_concat, training=False)
+        return self.scorer.score_multiple_candidates(history_concat, candidate_concat)
 
     def get_config(self):
         """Returns the configuration of the NAML model for serialization."""

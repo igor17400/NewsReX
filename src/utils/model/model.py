@@ -50,10 +50,7 @@ def initialize_model_and_dataset(cfg: DictConfig, training_metrics: list = None)
     console.log(f"Successfully instantiated {model.name} model.")
 
     optimizer = keras.optimizers.Adam(learning_rate=cfg.train.learning_rate)
-    if (
-            cfg.device.mixed_precision
-            and keras.mixed_precision.global_policy().name == "mixed_float16"
-    ):
+    if (keras.mixed_precision.global_policy().name == "mixed_float16"):
         optimizer = keras.mixed_precision.LossScaleOptimizer(optimizer)
 
     loss_function = get_loss(

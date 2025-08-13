@@ -1,26 +1,29 @@
 """
-Simplified MIND Dataset class that inherits from NewsDatasetBase.
-This class only defines MIND-specific configurations.
+Simplified Custom Dataset class that inherits from NewsDatasetBase.
+This class allows for flexible dataset configurations.
 """
 from typing import Dict, Optional
 from omegaconf import DictConfig
 
-from src.datasets.base_news import NewsDatasetBase
+from .base_news import NewsDatasetBase
 
 
-class MINDDataset(NewsDatasetBase):
-    """MIND (Microsoft News Dataset) implementation."""
+class CustomDataset(NewsDatasetBase):
+    """Generic custom dataset implementation for datasets following MIND format."""
     
     def __init__(
             self,
             name: str,
             version: str,
-            urls: Dict,
-            max_title_length: int,
-            max_abstract_length: int,
-            max_history_length: int,
-            max_impressions_length: int,
-            seed: int,
+            language: str,
+            data_path: Optional[str] = None,
+            urls: Optional[Dict] = None,
+            download_if_missing: bool = True,
+            max_title_length: int = 30,
+            max_abstract_length: int = 50,
+            max_history_length: int = 50,
+            max_impressions_length: int = 5,
+            seed: int = 42,
             embedding_type: str = "glove",
             embedding_size: int = 300,
             sampling: Optional[DictConfig] = None,
@@ -41,14 +44,16 @@ class MINDDataset(NewsDatasetBase):
             process_user_id: bool = False,
             max_entities: int = 1000,
             max_relations: int = 500,
+            id_prefix: str = "",  # Can be customized per dataset
+            user_id_prefix: str = "",  # Can be customized per dataset
             **kwargs
     ):
         super().__init__(
             name=name,
             version=version,
-            data_path=None,  # Use default cache path
-            urls=urls[version],  # Get URLs for specific version from config
-            language="english",  # MIND is in English
+            data_path=data_path,
+            urls=urls,
+            language=language,
             max_title_length=max_title_length,
             max_abstract_length=max_abstract_length,
             max_history_length=max_history_length,
@@ -74,7 +79,8 @@ class MINDDataset(NewsDatasetBase):
             process_user_id=process_user_id,
             max_entities=max_entities,
             max_relations=max_relations,
-            download_if_missing=True,
-            id_prefix="N",  # MIND uses "N" prefix for news IDs
-            user_id_prefix="U",  # MIND uses "U" prefix for user IDs
+            download_if_missing=download_if_missing,
+            id_prefix=id_prefix,
+            user_id_prefix=user_id_prefix,
+            **kwargs  # Pass any additional parameters like auto_convert_format, auto_split_behaviors
         )

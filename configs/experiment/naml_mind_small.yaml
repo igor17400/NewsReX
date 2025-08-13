@@ -1,9 +1,9 @@
 # @package _global_
 defaults:
-- /sampling/base
-- _self_
-- override /model: naml
-- override /dataset: mind
+  - /sampling/base
+  - _self_
+  - override /model: naml
+  - override /dataset: mind
 
 # Experiment name
 name: "naml_mind_small"
@@ -51,18 +51,22 @@ model:
 # Training parameters
 train:
   batch_size: 16
-  num_epochs: 10
+  num_epochs: 5
   learning_rate: 0.0001
   early_stopping:
     patience: 3
     min_improvement: 0.01
 
+# Evaluation parameters
+eval:
+  fast_evaluation: true # Whether to use fast evaluation with precomputed vectors
+  batch_size: 8192 # Batch size for evaluation
+
 # Logging
 logging:
   enable_wandb: true
   project_name: "NewsReX"
-  experiment_name: "naml_mind_small_bs${train.batch_size}"
-  log_every_n_steps: 100
+  experiment_name: "naml_mind_small"
 
 # Sampling configuration
 sampling:
@@ -74,4 +78,4 @@ sampling:
 device:
   gpu_ids: [ 0 ]
   memory_limit: 2
-  mixed_precision: false
+  precision: "float32"
