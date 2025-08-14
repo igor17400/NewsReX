@@ -85,7 +85,7 @@ def analyze_article_performance(
 
     # 3. CREATE COMPARISON PLOT
     print(f"\nCreating side-by-side comparison...")
-    fig3, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 8))
+    fig3, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
 
     # Panel 1: Full dataset
     create_exposure_click_heatmap(
@@ -100,7 +100,8 @@ def analyze_article_performance(
         bottom_df,
         title=f'Bottom {percentile_to_show}%\n({len(bottom_df):,} articles)',
         ax=ax2,
-        show_ctr_regions=True
+        show_ctr_regions=True,
+        ctr_legend_loc='upper right'
     )
 
     # Panel 3: Top percentile
