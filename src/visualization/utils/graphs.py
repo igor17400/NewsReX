@@ -69,7 +69,7 @@ def create_exposure_click_heatmap(
                     x_lin[valid_mask],
                     y_line[valid_mask],
                     '--', label=f'ctr={ctr_level}',
-                    linewidth=1.5, alpha=0.9, color=color
+                    linewidth=1.5, alpha=0.3, color=color
                 )
 
             y_upper_bound = np.minimum(y_upper_bound, y_line)
@@ -148,7 +148,7 @@ def create_exposure_click_heatmap(
 
     ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
             verticalalignment='top', fontsize=9,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.3, edgecolor='gray'))
 
     plt.tight_layout()
 
