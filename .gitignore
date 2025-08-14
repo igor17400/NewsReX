@@ -82,3 +82,6 @@ site/
 # Environment variables
 .env
 .env.*
+
+# Figures
+src/visualization/figures/
