@@ -1,10 +1,11 @@
-# NewsRex: Behind The Curtains for Recommender Systems
+# NewsRex: NewsReX: A More Efficient Approach to News Recommendation
+with Keras 3 and JAX
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
-NewsRex is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. The framework has been optimized with **Keras 3 + JAX backend** for enhanced performance through JIT compilation and XLA acceleration. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning, but we have chosen to proceed with Keras due to its widespread adoption and the fact that many state-of-the-art models are directly implemented using Keras.
+NewsRex is a modular and extensible framework for news recommendation systems research, implementing state-of-the-art models with a focus on reproducibility and ease of use. The framework has been optimized with **Keras 3 + JAX backend** for enhanced performance through JIT compilation and XLA acceleration. This project draws inspiration from the work done by [newsreclib](https://github.com/andreeaiana/newsreclib) with PyTorch Lightning.
 
 ## 🌟 Features
 
