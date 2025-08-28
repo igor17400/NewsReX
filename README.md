@@ -143,3 +143,26 @@ NewsRex is a modular and extensible framework for news recommendation systems re
 # Train with JAX backend
 poetry run python src/train.py experiment=nrms_mind_small
 ```
+
+---
+
+# Authors & Affiliations
+
+* **Igor L.R. Azevedo** * **ORCiD:** 0000-0001-5144-825X
+    * **Affiliation:** The University of Tokyo, Tokyo, Japan
+    * **Email:** igorazevedo@acm.org
+
+* **Toyotaro Suzumura**
+    * **ORCiD:** 0000-0001-6412-8386
+    * **Affiliation:** The University of Tokyo, Tokyo, Japan
+    * **Email:** suzumura@acm.org
+
+* **Yuichiro Yasui**
+    * **ORCiD:** 0000-0002-4175-9318
+    * **Affiliation:** Nikkei Inc., Tokyo, Japan
+    * **Email:** yuichiro.yasui@nex.nikkei.com
+
+# Citation
+
+``````
+
