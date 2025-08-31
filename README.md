@@ -164,5 +164,15 @@ poetry run python src/train.py experiment=nrms_mind_small
 
 # Citation
 
-``````
+```
+@misc{azevedo2025newsrexefficientapproachnews,
+      title={NewsReX: A More Efficient Approach to News Recommendation with Keras 3 and JAX}, 
+      author={Igor L. R. Azevedo and Toyotaro Suzumura and Yuichiro Yasui},
+      year={2025},
+      eprint={2508.21572},
+      archivePrefix={arXiv},
+      primaryClass={cs.IR},
+      url={https://arxiv.org/abs/2508.21572}, 
+}
+```
 
