@@ -211,13 +211,21 @@ All models are evaluated on:
 ## Citation
 
 ```bibtex
-@misc{azevedo2025newsrexefficientapproachnews,
-      title={NewsReX: A More Efficient Approach to News Recommendation with Keras 3 and JAX},
-      author={Igor L. R. Azevedo and Toyotaro Suzumura and Yuichiro Yasui},
-      year={2025},
-      eprint={2508.21572},
-      archivePrefix={arXiv},
-      primaryClass={cs.IR},
-      url={https://arxiv.org/abs/2508.21572},
+@inproceedings{10.1145/3799682.3840209,
+author = {L.R. Azevedo, Igor and Suzumura, Toyotaro and Yasui, Yuichiro},
+title = {NewsReX: An Open-Source Multi-Framework for Neural News Recommendation},
+year = {2026},
+isbn = {9798400725395},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3799682.3840209},
+doi = {10.1145/3799682.3840209},
+abstract = {Reproducing and comparing results in neural news recommendation research remains difficult due to fragmented codebases, inconsistent preprocessing pipelines, and tight coupling between models and deep learning frameworks. We present NewsReX. https://github.com/igor17400/NewsReX, an open-source framework that unifies multiple neural news recommendation models across two ML backends (PyTorch and JAX/Flax). Models are defined through a structured YAML specification that captures architecture, training recipe, and data contract, decoupling model definition from framework-specific implementation. A Hydra-based configuration system enables composable experiments with single-command framework switching. We provide cross-framework parity tests to verify numerical consistency across backends, allowing researchers to reproduce results from the original implementations and then transfer experiments to their preferred framework. We report comprehensive experiments on the MIND-small benchmark with multiple seeds per model and per framework, and demonstrate multilingual generalization by training on a proprietary Japanese news dataset from Nikkei News. https://nikkei.com/. We also publish pre-trained model weights on Hugging Face. https://huggingface.co/newsrex/ so that researchers can build on existing results without redundant retraining, reducing both computational cost and energy consumption. All source code, experiment configurations, and trained model weights are publicly available.},
+booktitle = {Proceedings of the 35th ACM International Conference on Information and Knowledge Management},
+pages = {8946–8950},
+numpages = {5},
+keywords = {recommendation systems, news recommendation, open source recommendation framework},
+location = {Rome, Italy},
+series = {CIKM '26}
 }
 ```
